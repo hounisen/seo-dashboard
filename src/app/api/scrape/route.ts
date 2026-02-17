@@ -1,0 +1,72 @@
+// app/api/scrape/route.ts
+import { NextRequest, NextResponse } from 'next/server'
+
+export async function POST(req: NextRequest) {
+  const { url } = await req.json()
+
+  if (!url) {
+    return NextResponse.json({ error: 'URL er påkrævet' }, { status: 400 })
+  }
+
+  const apiKey = process.env.FIRECRAWL_API_KEY
+  if (!apiKey) {
+    return NextResponse.json({ error: 'FIRECRAWL_API_KEY er ikke sat' }, { status: 500 })
+  }
+
+  try {
+    const response = await fetch('https://api.firecrawl.dev/v1/scrape', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        url,
+        formats: ['markdown', 'html'],
+        onlyMainContent: true,
+      }),
+    })
+
+    if (!response.ok) {
+      const err = await response.text()
+      return NextResponse.json({ error: `Firecrawl fejl: ${err}` }, { status: response.status })
+    }
+
+    const data = await response.json()
+
+    // Extract useful fields from the scraped page
+    const markdown: string = data.data?.markdown ?? ''
+    const metadata = data.data?.metadata ?? {}
+
+    // Count approximate word count from markdown
+    const wordCount = markdown.split(/\s+/).filter(Boolean).length
+
+    // Extract H1 from metadata or first # in markdown
+    const h1Match = markdown.match(/^#\s+(.+)$/m)
+    const h1 = h1Match?.[1] ?? metadata.title ?? ''
+
+    // Count internal links (rough heuristic from markdown)
+    const domain = new URL(url).hostname
+    const internalLinkMatches = markdown.match(new RegExp(`\\[.*?\\]\\(https?://${domain.replace('.', '\\.')}`, 'g'))
+    const internalLinks = internalLinkMatches?.length ?? 0
+
+    // Count H2s
+    const h2Matches = markdown.match(/^##\s+/gm)
+    const h2Count = h2Matches?.length ?? 0
+
+    return NextResponse.json({
+      success: true,
+      title: metadata.title ?? '',
+      description: metadata.description ?? '',
+      h1,
+      bodyContent: markdown,
+      wordCount,
+      internalLinks,
+      h2Count,
+      url: metadata.url ?? url,
+    })
+  } catch (err) {
+    console.error('Scrape error:', err)
+    return NextResponse.json({ error: 'Ukendt fejl ved scraping' }, { status: 500 })
+  }
+}
