@@ -9,10 +9,18 @@ interface FormState {
   competitorUrls: string
   targetKeyword: string
   semanticKeywords: string
+  customKeywords: string
   pageTitle: string
   metaDescription: string
   h1: string
   bodyContent: string
+}
+
+interface GscData {
+  keyword: string
+  impressions: number
+  clicks: number
+  position: number
 }
 
 const DEFAULT_FORM: FormState = {
@@ -20,6 +28,7 @@ const DEFAULT_FORM: FormState = {
   competitorUrls: '',
   targetKeyword: '',
   semanticKeywords: '',
+  customKeywords: '',
   pageTitle: '',
   metaDescription: '',
   h1: '',
@@ -115,6 +124,8 @@ export default function SeoDashboard() {
   const [scrapeError, setScrapeError] = useState('')
   const [openRec, setOpenRec] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'form' | 'dashboard'>('form')
+  const [gscData, setGscData] = useState<GscData[]>([])
+  const [gscFileName, setGscFileName] = useState('')
 
   // Live-recalculate whenever form changes
   useEffect(() => {
@@ -166,6 +177,35 @@ export default function SeoDashboard() {
       setScraping(false)
     }
   }, [form.url])
+
+  // Handle GSC CSV upload
+  const handleGscUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    
+    setGscFileName(file.name)
+    const reader = new FileReader()
+    reader.onload = (evt) => {
+      const text = evt.target?.result as string
+      const lines = text.split('\n').filter(Boolean)
+      const data: GscData[] = []
+      
+      // Parse CSV - skip header row
+      for (let i = 1; i < lines.length; i++) {
+        const parts = lines[i].split(',').map(s => s.trim().replace(/"/g, ''))
+        if (parts.length >= 4) {
+          data.push({
+            keyword: parts[0],
+            impressions: parseInt(parts[1]) || 0,
+            clicks: parseInt(parts[2]) || 0,
+            position: parseFloat(parts[3]) || 0,
+          })
+        }
+      }
+      setGscData(data)
+    }
+    reader.readAsText(file)
+  }, [])
 
   const pct = result?.percentage ?? 0
 
@@ -285,6 +325,45 @@ export default function SeoDashboard() {
                     onChange={e => updateForm('semanticKeywords', e.target.value)}
                     className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition resize-none"
                   />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-gray-500 block mb-1.5">
+                    Custom keyword-kombinationer <span className="text-gray-300">(kommasepareret)</span>
+                  </label>
+                  <textarea
+                    rows={2}
+                    placeholder="køb nitrilhandsker, nitrilhandsker tilbud, bedste nitrilhandsker"
+                    value={form.customKeywords}
+                    onChange={e => updateForm('customKeywords', e.target.value)}
+                    className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition resize-none"
+                  />
+                  <p className="text-xs text-gray-400 mt-1.5">Varianter af dit primære keyword der scores separat</p>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-gray-500 block mb-1.5">
+                    Google Search Console data <span className="text-gray-300">(valgfri CSV)</span>
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="file"
+                      accept=".csv"
+                      onChange={handleGscUpload}
+                      className="hidden"
+                      id="gsc-upload"
+                    />
+                    <label
+                      htmlFor="gsc-upload"
+                      className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl border-2 border-dashed border-gray-200 text-sm text-gray-500 hover:border-blue-300 hover:text-blue-600 transition cursor-pointer"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                      </svg>
+                      {gscFileName || 'Upload GSC CSV (keyword, impressions, clicks, position)'}
+                    </label>
+                  </div>
+                  {gscData.length > 0 && (
+                    <p className="text-xs text-green-600 mt-1.5 font-medium">✓ {gscData.length} keywords indlæst fra GSC</p>
+                  )}
                 </div>
               </div>
             </div>
@@ -505,6 +584,79 @@ export default function SeoDashboard() {
                     </table>
                   </div>
                 </div>
+
+                {/* Custom Keywords section */}
+                {form.customKeywords && (
+                  <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-3">
+                    <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">Custom Keyword-kombinationer</p>
+                    <div className="flex flex-wrap gap-2 mb-4">
+                      {form.customKeywords.split(',').map(kw => kw.trim()).filter(Boolean).map((kw, i) => {
+                        const text = [form.pageTitle, form.metaDescription, form.h1, form.bodyContent].join(' ').toLowerCase()
+                        const count = (text.match(new RegExp(kw.toLowerCase(), 'g')) || []).length
+                        const status = count === 0 ? 'red' : count < 2 ? 'yellow' : 'green'
+                        return (
+                          <span key={i}
+                            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-transform hover:scale-105 ${
+                              status === 'green'
+                                ? 'bg-emerald-50 text-emerald-700'
+                                : status === 'yellow'
+                                ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                : 'bg-red-50 text-red-600 border border-red-200'
+                            }`}>
+                            {kw}
+                            {status === 'green' && <span className="text-emerald-500">✓</span>}
+                            {count > 0 && status !== 'green' && (
+                              <span className="bg-black/10 rounded-full px-1.5">{count}×</span>
+                            )}
+                          </span>
+                        )
+                      })}
+                    </div>
+                    <p className="text-xs text-gray-400">Disse keyword-kombinationer tæller <strong>ikke</strong> i den samlede SEO-score, men viser om du dækker long-tail varianter.</p>
+                  </div>
+                )}
+
+                {/* GSC Data comparison */}
+                {gscData.length > 0 && (
+                  <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-3">
+                    <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">Google Search Console Data</p>
+                    <div className="overflow-x-auto -mx-2">
+                      <table className="w-full text-sm min-w-[480px]">
+                        <thead>
+                          <tr className="border-b border-gray-100">
+                            {['Keyword', 'Impressions', 'Clicks', 'Position', 'På siden?'].map(h => (
+                              <th key={h} className="text-left text-xs font-bold tracking-widest uppercase text-gray-400 pb-3 px-3">{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {gscData.slice(0, 10).map((row, i) => {
+                            const text = [form.pageTitle, form.metaDescription, form.h1, form.bodyContent].join(' ').toLowerCase()
+                            const onPage = text.includes(row.keyword.toLowerCase())
+                            return (
+                              <tr key={i} className="border-b border-gray-50 hover:bg-gray-50 transition">
+                                <td className="py-3 px-3 font-medium text-gray-800">{row.keyword}</td>
+                                <td className="py-3 px-3 text-gray-600 tabular-nums">{row.impressions.toLocaleString()}</td>
+                                <td className="py-3 px-3 text-gray-600 tabular-nums">{row.clicks.toLocaleString()}</td>
+                                <td className="py-3 px-3 text-gray-600 tabular-nums">{row.position.toFixed(1)}</td>
+                                <td className="py-3 px-3">
+                                  {onPage ? (
+                                    <span className="text-emerald-600 text-xs font-semibold">✓ Ja</span>
+                                  ) : (
+                                    <span className="text-red-500 text-xs font-semibold">✗ Nej</span>
+                                  )}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    {gscData.length > 10 && (
+                      <p className="text-xs text-gray-400 mt-3">Viser top 10 af {gscData.length} keywords fra GSC</p>
+                    )}
+                  </div>
+                )}
 
                 {/* Content gaps */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-3">
