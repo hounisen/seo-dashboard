@@ -236,17 +236,21 @@ export function analyzeSeo(input: SeoInput): SeoResult {
       label: 'FAQ Section',
       status: (() => {
         const allText = (input.bodyContent + input.h1 + input.pageTitle).toLowerCase()
-        const hasFaq = /\b(faq|ofte stillede spørgsmål|spørgsmål og svar|q&a|questions)\b/i.test(allText)
+        // Remove markdown formatting (_, *, #) before checking
+        const cleanText = allText.replace(/[_*#]/g, '')
+        const hasFaq = /(faq|ofte stillede spørgsmål|spørgsmål og svar|q&a|questions)/i.test(cleanText)
         return hasFaq ? 'ok' : 'warn'
       })(),
       statusLabel: (() => {
         const allText = (input.bodyContent + input.h1 + input.pageTitle).toLowerCase()
-        const hasFaq = /\b(faq|ofte stillede spørgsmål|spørgsmål og svar|q&a|questions)\b/i.test(allText)
+        const cleanText = allText.replace(/[_*#]/g, '')
+        const hasFaq = /(faq|ofte stillede spørgsmål|spørgsmål og svar|q&a|questions)/i.test(cleanText)
         return hasFaq ? 'Optimised' : '1 advarsel'
       })(),
       detail: (() => {
         const allText = (input.bodyContent + input.h1 + input.pageTitle).toLowerCase()
-        const hasFaq = /\b(faq|ofte stillede spørgsmål|spørgsmål og svar|q&a|questions)\b/i.test(allText)
+        const cleanText = allText.replace(/[_*#]/g, '')
+        const hasFaq = /(faq|ofte stillede spørgsmål|spørgsmål og svar|q&a|questions)/i.test(cleanText)
         return hasFaq
           ? 'FAQ-sektion fundet. Sørg for at tilføje JSON-LD structured data for at trigger rich snippets i Google.'
           : 'Ingen FAQ-sektion fundet. Tilføj 3-5 spørgsmål/svar med JSON-LD structured data for bedre SERP-synlighed.'
