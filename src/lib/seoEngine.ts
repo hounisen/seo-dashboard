@@ -142,8 +142,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     internalLinks = markdownLinks + plainUrls + htmlLinks
   }
   
-  if (internalLinks >= 3) score += 5
-  else if (internalLinks >= 1) score += 3
+  if (internalLinks >= 1) score += 5
 
   const percentage = Math.min(Math.round(score), 100)
 
@@ -215,11 +214,11 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     {
       id: 'links',
       label: 'Internal Links',
-      status: internalLinks >= 3 ? 'ok' : internalLinks >= 1 ? 'warn' : 'error',
-      statusLabel: internalLinks >= 3 ? 'Optimised' : `${internalLinks} fundet`,
-      detail: internalLinks >= 3
-        ? `${internalLinks} interne links fundet. God intern linking.`
-        : `Kun ${internalLinks} interne links. Tilsæt links fra relaterede kategorier med naturlige ankertekster.`,
+      status: internalLinks >= 1 ? 'ok' : 'error',
+      statusLabel: internalLinks >= 1 ? 'Optimised' : '0 fundet',
+      detail: internalLinks >= 1
+        ? `${internalLinks} ${internalLinks === 1 ? 'internt link' : 'interne links'} fundet. ${internalLinks === 1 ? 'Ét relevant link er bedre end mange irrelevante.' : 'God intern linking.'}`
+        : `Ingen interne links fundet. Tilsæt mindst ét relevant link til en relateret side.`,
     },
     {
       id: 'meta',
