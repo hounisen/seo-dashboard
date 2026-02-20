@@ -22,8 +22,9 @@ export async function POST(req: NextRequest) {
       },
       body: JSON.stringify({
         url,
-        formats: ['markdown', 'html'],
+        formats: ['markdown'],
         onlyMainContent: true,
+        excludeTags: ['script', 'style', 'nav', 'footer', 'iframe', 'noscript'],
       }),
     })
 
@@ -54,10 +55,20 @@ export async function POST(req: NextRequest) {
     const h2Matches = markdown.match(/^##\s+/gm)
     const h2Count = h2Matches?.length ?? 0
 
+    // Fix meta description - only take first sentence if multiple are concatenated
+    let description = metadata.description ?? ''
+    if (description.includes(',')) {
+      // Split by comma and take first part if it looks like multiple descriptions
+      const parts = description.split(',')
+      if (parts.length > 1 && parts[1].trim().length > 50) {
+        description = parts[0].trim()
+      }
+    }
+
     return NextResponse.json({
       success: true,
       title: metadata.title ?? '',
-      description: metadata.description ?? '',
+      description,
       h1,
       bodyContent: markdown,
       wordCount,
