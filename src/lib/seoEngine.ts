@@ -126,8 +126,22 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   if (h2Count >= 2) score += 5
   else if (h2Count >= 1) score += 3
 
-  // 8. Internal links (5 pts)
-  const internalLinks = input.internalLinks ?? 0
+  // 8. Internal links (5 pts) - detect from markdown links, URLs, and HTML
+  let internalLinks = input.internalLinks ?? 0
+  
+  // If no links passed from scraper, try to detect from content
+  if (internalLinks === 0) {
+    const allContent = input.bodyContent + ' ' + input.pageTitle + ' ' + input.metaDescription
+    // Count markdown links [text](url)
+    const markdownLinks = (allContent.match(/\[([^\]]+)\]\(([^)]+)\)/g) || []).length
+    // Count plain URLs (http:// or https://)
+    const plainUrls = (allContent.match(/https?:\/\/[^\s<>"]+/gi) || []).length
+    // Count HTML anchor tags
+    const htmlLinks = (allContent.match(/<a[^>]+href/gi) || []).length
+    
+    internalLinks = markdownLinks + plainUrls + htmlLinks
+  }
+  
   if (internalLinks >= 3) score += 5
   else if (internalLinks >= 1) score += 3
 
@@ -217,6 +231,27 @@ export function analyzeSeo(input: SeoInput): SeoResult {
           ? `Meta description er optimeret (${input.metaDescription.length} tegn).`
           : `Meta description indeholder keyword, men er ${input.metaDescription.length} tegn. Optimal: 120–160 tegn.`
         : `Meta description mangler target keyword og/eller er for ${input.metaDescription.length < 120 ? 'kort' : 'lang'} (${input.metaDescription.length} tegn). Optimal: 120–160 tegn.`,
+    },
+    {
+      id: 'faq',
+      label: 'FAQ Section',
+      status: (() => {
+        const allText = (input.bodyContent + input.h1 + input.pageTitle).toLowerCase()
+        const hasFaq = /\b(faq|ofte stillede spørgsmål|spørgsmål og svar|q&a|questions)\b/i.test(allText)
+        return hasFaq ? 'ok' : 'warn'
+      })(),
+      statusLabel: (() => {
+        const allText = (input.bodyContent + input.h1 + input.pageTitle).toLowerCase()
+        const hasFaq = /\b(faq|ofte stillede spørgsmål|spørgsmål og svar|q&a|questions)\b/i.test(allText)
+        return hasFaq ? 'Optimised' : '1 advarsel'
+      })(),
+      detail: (() => {
+        const allText = (input.bodyContent + input.h1 + input.pageTitle).toLowerCase()
+        const hasFaq = /\b(faq|ofte stillede spørgsmål|spørgsmål og svar|q&a|questions)\b/i.test(allText)
+        return hasFaq
+          ? 'FAQ-sektion fundet. Sørg for at tilføje JSON-LD structured data for at trigger rich snippets i Google.'
+          : 'Ingen FAQ-sektion fundet. Tilføj 3-5 spørgsmål/svar med JSON-LD structured data for bedre SERP-synlighed.'
+      })(),
     },
   ]
 

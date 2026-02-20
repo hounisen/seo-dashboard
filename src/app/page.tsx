@@ -126,6 +126,8 @@ export default function SeoDashboard() {
   const [activeTab, setActiveTab] = useState<'form' | 'dashboard'>('form')
   const [gscData, setGscData] = useState<GscData[]>([])
   const [gscFileName, setGscFileName] = useState('')
+  const [competitorAnalysis, setCompetitorAnalysis] = useState<{url: string, result: SeoResult} | null>(null)
+  const [analyzingCompetitor, setAnalyzingCompetitor] = useState(false)
 
   // Live-recalculate whenever form changes
   useEffect(() => {
@@ -206,6 +208,40 @@ export default function SeoDashboard() {
     }
     reader.readAsText(file)
   }, [])
+
+  // Analyze competitor
+  const analyzeCompetitor = useCallback(async () => {
+    const competitorUrl = form.competitorUrls.split('\n')[0]?.trim()
+    if (!competitorUrl || !form.targetKeyword) return
+    
+    setAnalyzingCompetitor(true)
+    try {
+      const res = await fetch('/api/scrape', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: competitorUrl }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.error) return
+      
+      const competitorInput: SeoInput = {
+        url: competitorUrl,
+        competitorUrls: [],
+        targetKeyword: form.targetKeyword.trim(),
+        semanticKeywords: form.semanticKeywords.split(',').map(s => s.trim()).filter(Boolean),
+        pageTitle: data.title || '',
+        metaDescription: data.description || '',
+        h1: data.h1 || '',
+        bodyContent: data.bodyContent || '',
+      }
+      const competitorResult = analyzeSeo(competitorInput)
+      setCompetitorAnalysis({ url: competitorUrl, result: competitorResult })
+    } catch {
+      // Silent fail
+    } finally {
+      setAnalyzingCompetitor(false)
+    }
+  }, [form.competitorUrls, form.targetKeyword, form.semanticKeywords])
 
   const pct = result?.percentage ?? 0
 
@@ -293,6 +329,16 @@ export default function SeoDashboard() {
                   className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition resize-none"
                   style={{ fontFamily: 'Inter, monospace' }}
                 />
+                {form.competitorUrls && form.targetKeyword && (
+                  <button
+                    onClick={analyzeCompetitor}
+                    disabled={analyzingCompetitor}
+                    className="mt-3 px-4 py-2 rounded-lg text-xs font-semibold text-white transition-all disabled:opacity-50"
+                    style={{ background: analyzingCompetitor ? '#94a3b8' : '#7c5cff' }}
+                  >
+                    {analyzingCompetitor ? 'Analyserer...' : '🔍 Analysér konkurrent'}
+                  </button>
+                )}
               </div>
             </div>
 
@@ -513,6 +559,81 @@ export default function SeoDashboard() {
                     <p className="mt-3 text-xs text-gray-400 font-mono truncate">URL: {form.url}</p>
                   )}
                 </div>
+
+                {/* Competitor comparison */}
+                {competitorAnalysis && (
+                  <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-1">
+                    <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">
+                      Konkurrent-sammenligning
+                    </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Your site */}
+                      <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
+                        <div className="text-xs font-semibold text-blue-600 uppercase tracking-wide mb-2">Din side</div>
+                        <div className="flex items-baseline gap-2 mb-3">
+                          <span className="text-3xl font-bold text-gray-900">{pct}%</span>
+                          <span className="text-sm text-gray-500">SEO Score</span>
+                        </div>
+                        <div className="space-y-1.5 text-sm">
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">Ordantal:</span>
+                            <span className="font-semibold text-gray-900">{result?.wordCount || 0}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">Keywords fundet:</span>
+                            <span className="font-semibold text-emerald-600">{result?.keywordsFound || 0}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">Keywords mangler:</span>
+                            <span className="font-semibold text-red-500">{result?.keywordsMissing || 0}</span>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Competitor */}
+                      <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
+                        <div className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">Konkurrent</div>
+                        <div className="flex items-baseline gap-2 mb-3">
+                          <span className="text-3xl font-bold text-gray-900">{competitorAnalysis.result.percentage}%</span>
+                          <span className="text-sm text-gray-500">SEO Score</span>
+                        </div>
+                        <div className="space-y-1.5 text-sm">
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">Ordantal:</span>
+                            <span className="font-semibold text-gray-900">{competitorAnalysis.result.wordCount}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">Keywords fundet:</span>
+                            <span className="font-semibold text-emerald-600">{competitorAnalysis.result.keywordsFound}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">Keywords mangler:</span>
+                            <span className="font-semibold text-red-500">{competitorAnalysis.result.keywordsMissing}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {/* Insights */}
+                    <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm">
+                      <div className="font-semibold text-amber-900 mb-1">📊 Konklusioner:</div>
+                      <ul className="text-amber-800 space-y-1 ml-4 list-disc">
+                        {competitorAnalysis.result.wordCount > (result?.wordCount || 0) && (
+                          <li>Konkurrenten har <strong>{competitorAnalysis.result.wordCount - (result?.wordCount || 0)} flere ord</strong> – overvej at uddybe indholdet</li>
+                        )}
+                        {competitorAnalysis.result.percentage > pct && (
+                          <li>Konkurrenten scorer <strong>{competitorAnalysis.result.percentage - pct} point højere</strong> samlet</li>
+                        )}
+                        {competitorAnalysis.result.keywordsFound > (result?.keywordsFound || 0) && (
+                          <li>Konkurrenten dækker <strong>{competitorAnalysis.result.keywordsFound - (result?.keywordsFound || 0)} flere keywords</strong></li>
+                        )}
+                        {pct > competitorAnalysis.result.percentage && (
+                          <li className="text-green-700"><strong>✓ Du ligger foran!</strong> Din side scorer {pct - competitorAnalysis.result.percentage} point højere</li>
+                        )}
+                      </ul>
+                    </div>
+                  </div>
+                )}
 
                 {/* Recommendations */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-1">
