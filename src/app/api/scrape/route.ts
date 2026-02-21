@@ -22,9 +22,8 @@ export async function POST(req: NextRequest) {
       },
       body: JSON.stringify({
         url,
-        formats: ['markdown'],
-        onlyMainContent: true,
-        excludeTags: ['script', 'style', 'nav', 'footer', 'iframe', 'noscript', 'aside', 'form'],
+        formats: ['markdown', 'rawHtml'],
+        onlyMainContent: false, // Need full HTML to find JSON-LD in head
       }),
     })
 
@@ -38,10 +37,10 @@ export async function POST(req: NextRequest) {
     // Extract useful fields from the scraped page
     const markdown: string = data.data?.markdown ?? ''
     const metadata = data.data?.metadata ?? {}
-    const html: string = data.data?.html ?? ''
+    const rawHtml: string = data.data?.rawHtml ?? ''
 
-    // Detect structured data (JSON-LD) in the HTML
-    const jsonLdMatches = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)
+    // Detect structured data (JSON-LD) in the raw HTML
+    const jsonLdMatches = rawHtml.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)
     const hasStructuredData = jsonLdMatches && jsonLdMatches.length > 0
     const structuredDataTypes: string[] = []
     
