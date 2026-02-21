@@ -39,13 +39,20 @@ export async function POST(req: NextRequest) {
     const metadata = data.data?.metadata ?? {}
     const rawHtml: string = data.data?.rawHtml ?? ''
 
+    // Debug info
+    const debugInfo = {
+      hasRawHtml: !!rawHtml,
+      rawHtmlLength: rawHtml.length,
+      formats: Object.keys(data.data || {}),
+    }
+
     // Detect structured data (JSON-LD) in the raw HTML
     const jsonLdMatches = rawHtml.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)
     const hasStructuredData = jsonLdMatches && jsonLdMatches.length > 0
     const structuredDataTypes: string[] = []
     
     if (jsonLdMatches) {
-      jsonLdMatches.forEach(match => {
+      jsonLdMatches.forEach((match, idx) => {
         try {
           const jsonContent = match.replace(/<script[^>]*>|<\/script>/gi, '').trim()
           const parsed = JSON.parse(jsonContent)
@@ -53,7 +60,7 @@ export async function POST(req: NextRequest) {
           if (type && !structuredDataTypes.includes(type)) {
             structuredDataTypes.push(type)
           }
-        } catch {
+        } catch (err) {
           // Invalid JSON-LD, skip
         }
       })
@@ -97,6 +104,7 @@ export async function POST(req: NextRequest) {
       url: metadata.url ?? url,
       hasStructuredData,
       structuredDataTypes,
+      _debug: debugInfo, // Temporary debug info
     })
   } catch (err) {
     console.error('Scrape error:', err)
