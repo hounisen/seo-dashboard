@@ -771,7 +771,7 @@ export default function SeoDashboard() {
                       <table className="w-full text-sm min-w-[480px]">
                         <thead>
                           <tr className="border-b border-gray-100">
-                            {['Keyword', 'Impressions', 'Clicks', 'Position', 'På siden?'].map(h => (
+                            {['Keyword', 'Clicks', 'Impressions', 'Position', 'På siden?'].map(h => (
                               <th key={h} className="text-left text-xs font-bold tracking-widest uppercase text-gray-400 pb-3 px-3">{h}</th>
                             ))}
                           </tr>
@@ -783,8 +783,8 @@ export default function SeoDashboard() {
                             return (
                               <tr key={i} className="border-b border-gray-50 hover:bg-gray-50 transition">
                                 <td className="py-3 px-3 font-medium text-gray-800">{row.keyword}</td>
-                                <td className="py-3 px-3 text-gray-600 tabular-nums">{row.impressions.toLocaleString()}</td>
                                 <td className="py-3 px-3 text-gray-600 tabular-nums">{row.clicks.toLocaleString()}</td>
+                                <td className="py-3 px-3 text-gray-600 tabular-nums">{row.impressions.toLocaleString()}</td>
                                 <td className="py-3 px-3 text-gray-600 tabular-nums">{row.position.toFixed(1)}</td>
                                 <td className="py-3 px-3">
                                   {onPage ? (
