@@ -38,6 +38,27 @@ export async function POST(req: NextRequest) {
     // Extract useful fields from the scraped page
     const markdown: string = data.data?.markdown ?? ''
     const metadata = data.data?.metadata ?? {}
+    const html: string = data.data?.html ?? ''
+
+    // Detect structured data (JSON-LD) in the HTML
+    const jsonLdMatches = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)
+    const hasStructuredData = jsonLdMatches && jsonLdMatches.length > 0
+    const structuredDataTypes: string[] = []
+    
+    if (jsonLdMatches) {
+      jsonLdMatches.forEach(match => {
+        try {
+          const jsonContent = match.replace(/<script[^>]*>|<\/script>/gi, '').trim()
+          const parsed = JSON.parse(jsonContent)
+          const type = parsed['@type']
+          if (type && !structuredDataTypes.includes(type)) {
+            structuredDataTypes.push(type)
+          }
+        } catch {
+          // Invalid JSON-LD, skip
+        }
+      })
+    }
 
     // Count approximate word count from markdown
     const wordCount = markdown.split(/\s+/).filter(Boolean).length
@@ -75,6 +96,8 @@ export async function POST(req: NextRequest) {
       internalLinks,
       h2Count,
       url: metadata.url ?? url,
+      hasStructuredData,
+      structuredDataTypes,
     })
   } catch (err) {
     console.error('Scrape error:', err)

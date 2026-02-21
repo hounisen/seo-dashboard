@@ -564,71 +564,97 @@ export default function SeoDashboard() {
                 {competitorAnalysis && (
                   <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-1">
                     <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">
-                      Konkurrent-sammenligning
+                      Konkurrent-Sammenligning (Benchmarks)
                     </p>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {/* Your site */}
-                      <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
-                        <div className="text-xs font-semibold text-blue-600 uppercase tracking-wide mb-2">Din side</div>
-                        <div className="flex items-baseline gap-2 mb-3">
-                          <span className="text-3xl font-bold text-gray-900">{pct}%</span>
-                          <span className="text-sm text-gray-500">SEO Score</span>
-                        </div>
-                        <div className="space-y-1.5 text-sm">
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Ordantal:</span>
-                            <span className="font-semibold text-gray-900">{result?.wordCount || 0}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Keywords fundet:</span>
-                            <span className="font-semibold text-emerald-600">{result?.keywordsFound || 0}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Keywords mangler:</span>
-                            <span className="font-semibold text-red-500">{result?.keywordsMissing || 0}</span>
-                          </div>
-                        </div>
-                      </div>
-                      
-                      {/* Competitor */}
-                      <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
-                        <div className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">Konkurrent</div>
-                        <div className="flex items-baseline gap-2 mb-3">
-                          <span className="text-3xl font-bold text-gray-900">{competitorAnalysis.result.percentage}%</span>
-                          <span className="text-sm text-gray-500">SEO Score</span>
-                        </div>
-                        <div className="space-y-1.5 text-sm">
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Ordantal:</span>
-                            <span className="font-semibold text-gray-900">{competitorAnalysis.result.wordCount}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Keywords fundet:</span>
-                            <span className="font-semibold text-emerald-600">{competitorAnalysis.result.keywordsFound}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Keywords mangler:</span>
-                            <span className="font-semibold text-red-500">{competitorAnalysis.result.keywordsMissing}</span>
-                          </div>
-                        </div>
-                      </div>
+                    
+                    {/* Benchmark Table */}
+                    <div className="overflow-x-auto -mx-2 mb-6">
+                      <table className="w-full text-sm min-w-[600px]">
+                        <thead>
+                          <tr className="border-b-2 border-gray-200">
+                            <th className="text-left text-xs font-bold tracking-widest uppercase text-gray-400 pb-3 px-3">Metrik</th>
+                            <th className="text-center text-xs font-bold tracking-widest uppercase text-blue-600 pb-3 px-3">Din Side</th>
+                            <th className="text-center text-xs font-bold tracking-widest uppercase text-gray-600 pb-3 px-3">Konkurrent</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr className="border-b border-gray-100">
+                            <td className="py-3 px-3 text-gray-600 font-medium">Ordantal</td>
+                            <td className="py-3 px-3 text-center">
+                              <span className={`font-bold ${(result?.wordCount || 0) >= competitorAnalysis.result.wordCount ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                {result?.wordCount || 0}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3 text-center text-gray-700 font-semibold">
+                              {competitorAnalysis.result.wordCount}
+                            </td>
+                          </tr>
+                          <tr className="border-b border-gray-100">
+                            <td className="py-3 px-3 text-gray-600 font-medium">Semantiske Keywords</td>
+                            <td className="py-3 px-3 text-center">
+                              <span className="font-bold text-emerald-600">{result?.keywordsFound || 0}/{(result?.keywordsFound || 0) + (result?.keywordsMissing || 0)}</span>
+                            </td>
+                            <td className="py-3 px-3 text-center text-gray-700 font-semibold">
+                              {competitorAnalysis.result.keywordsFound}/{competitorAnalysis.result.keywordsFound + competitorAnalysis.result.keywordsMissing}
+                            </td>
+                          </tr>
+                          <tr className="border-b border-gray-100">
+                            <td className="py-3 px-3 text-gray-600 font-medium">Readability</td>
+                            <td className="py-3 px-3 text-center font-bold text-gray-800">{result?.readabilityScore || 'Medium'}</td>
+                            <td className="py-3 px-3 text-center text-gray-700 font-semibold">{competitorAnalysis.result.readabilityScore}</td>
+                          </tr>
+                          <tr className="border-b border-gray-100">
+                            <td className="py-3 px-3 text-gray-600 font-medium">Structured Data</td>
+                            <td className="py-3 px-3 text-center">
+                              {result && result.recommendations.find(r => r.id === 'structured-data')?.status === 'ok' ? (
+                                <span className="text-emerald-600 font-bold">✓</span>
+                              ) : (
+                                <span className="text-red-500 font-bold">✗</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-3 text-center">
+                              {competitorAnalysis.result.recommendations.find(r => r.id === 'structured-data')?.status === 'ok' ? (
+                                <span className="text-emerald-600 font-bold">✓</span>
+                              ) : (
+                                <span className="text-red-500 font-bold">✗</span>
+                              )}
+                            </td>
+                          </tr>
+                          <tr>
+                            <td className="py-3 px-3 text-gray-600 font-medium">SEO Score</td>
+                            <td className="py-3 px-3 text-center">
+                              <span className={`text-2xl font-bold ${pct >= competitorAnalysis.result.percentage ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                {pct}%
+                              </span>
+                            </td>
+                            <td className="py-3 px-3 text-center text-gray-700 text-2xl font-bold">
+                              {competitorAnalysis.result.percentage}%
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
                     </div>
                     
                     {/* Insights */}
-                    <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm">
-                      <div className="font-semibold text-amber-900 mb-1">📊 Konklusioner:</div>
-                      <ul className="text-amber-800 space-y-1 ml-4 list-disc">
+                    <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm">
+                      <div className="font-semibold text-blue-900 mb-2">📊 Nøgleindsigter:</div>
+                      <ul className="text-blue-800 space-y-1.5 ml-4 list-disc">
                         {competitorAnalysis.result.wordCount > (result?.wordCount || 0) && (
                           <li>Konkurrenten har <strong>{competitorAnalysis.result.wordCount - (result?.wordCount || 0)} flere ord</strong> – overvej at uddybe indholdet</li>
                         )}
-                        {competitorAnalysis.result.percentage > pct && (
-                          <li>Konkurrenten scorer <strong>{competitorAnalysis.result.percentage - pct} point højere</strong> samlet</li>
+                        {(result?.wordCount || 0) > competitorAnalysis.result.wordCount && (
+                          <li className="text-emerald-700"><strong>✓ Du har dybere indhold</strong> med {(result?.wordCount || 0) - competitorAnalysis.result.wordCount} flere ord</li>
+                        )}
+                        {(result?.keywordsFound || 0) > competitorAnalysis.result.keywordsFound && (
+                          <li className="text-emerald-700"><strong>✓ Bedre keyword-dækning</strong> – du dækker {(result?.keywordsFound || 0) - competitorAnalysis.result.keywordsFound} flere semantiske keywords</li>
                         )}
                         {competitorAnalysis.result.keywordsFound > (result?.keywordsFound || 0) && (
                           <li>Konkurrenten dækker <strong>{competitorAnalysis.result.keywordsFound - (result?.keywordsFound || 0)} flere keywords</strong></li>
                         )}
-                        {pct > competitorAnalysis.result.percentage && (
-                          <li className="text-green-700"><strong>✓ Du ligger foran!</strong> Din side scorer {pct - competitorAnalysis.result.percentage} point højere</li>
+                        {pct > competitorAnalysis.result.percentage ? (
+                          <li className="text-emerald-700"><strong>✓ Du ligger foran!</strong> Din side scorer {pct - competitorAnalysis.result.percentage} point højere samlet</li>
+                        ) : pct < competitorAnalysis.result.percentage && (
+                          <li>Konkurrenten scorer <strong>{competitorAnalysis.result.percentage - pct} point højere</strong> samlet</li>
                         )}
                       </ul>
                     </div>
@@ -776,6 +802,132 @@ export default function SeoDashboard() {
                     {gscData.length > 10 && (
                       <p className="text-xs text-gray-400 mt-3">Viser top 10 af {gscData.length} keywords fra GSC</p>
                     )}
+                  </div>
+                )}
+
+                {/* GSC Keyword Gap Analysis - Low-Hanging Fruit */}
+                {gscData.length > 0 && (
+                  <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-3">
+                    <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-2">
+                      GSC Keyword Gap Analysis
+                    </p>
+                    <p className="text-sm text-gray-600 mb-4">Quick wins baseret på dine faktiske Google data</p>
+                    
+                    {/* Low-hanging fruit - keywords not on page but getting impressions */}
+                    {(() => {
+                      const text = [form.pageTitle, form.metaDescription, form.h1, form.bodyContent].join(' ').toLowerCase()
+                      const missingHighImpression = gscData
+                        .filter(row => !text.includes(row.keyword.toLowerCase()) && row.impressions > 0)
+                        .sort((a, b) => b.impressions - a.impressions)
+                        .slice(0, 5)
+                      
+                      const lowPosition = gscData
+                        .filter(row => row.position >= 4 && row.position <= 15 && row.impressions > 5)
+                        .sort((a, b) => b.impressions - a.impressions)
+                        .slice(0, 5)
+                      
+                      const highImpressionLowCtr = gscData
+                        .filter(row => {
+                          const ctr = row.impressions > 0 ? (row.clicks / row.impressions) * 100 : 0
+                          return row.impressions >= 50 && ctr < 5
+                        })
+                        .sort((a, b) => b.impressions - a.impressions)
+                        .slice(0, 5)
+                      
+                      return (
+                        <div className="space-y-4">
+                          {/* Missing keywords with impressions */}
+                          {missingHighImpression.length > 0 && (
+                            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                              <div className="flex items-center gap-2 mb-3">
+                                <span className="text-xl">🎯</span>
+                                <div>
+                                  <h4 className="text-sm font-bold text-amber-900">Low-Hanging Fruit</h4>
+                                  <p className="text-xs text-amber-700">Keywords der giver impressions, men mangler på siden</p>
+                                </div>
+                              </div>
+                              <div className="space-y-2">
+                                {missingHighImpression.map((row, i) => (
+                                  <div key={i} className="flex items-center justify-between p-2 bg-white rounded-lg border border-amber-100">
+                                    <div className="flex-1">
+                                      <span className="font-semibold text-gray-800 text-sm">{row.keyword}</span>
+                                      <div className="text-xs text-gray-500 mt-0.5">
+                                        {row.impressions.toLocaleString()} impressions · {row.clicks.toLocaleString()} clicks · Pos {row.position.toFixed(1)}
+                                      </div>
+                                    </div>
+                                    <span className="px-2 py-1 bg-amber-100 text-amber-800 text-xs font-semibold rounded">Tilføj til tekst</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          
+                          {/* Position 4-15 opportunities */}
+                          {lowPosition.length > 0 && (
+                            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                              <div className="flex items-center gap-2 mb-3">
+                                <span className="text-xl">📈</span>
+                                <div>
+                                  <h4 className="text-sm font-bold text-blue-900">Tæt på Top 3</h4>
+                                  <p className="text-xs text-blue-700">Små forbedringer kan give stor traffic-stigning</p>
+                                </div>
+                              </div>
+                              <div className="space-y-2">
+                                {lowPosition.map((row, i) => {
+                                  const estimatedBoost = Math.round(row.impressions * (0.3 - (row.clicks / row.impressions)))
+                                  return (
+                                    <div key={i} className="flex items-center justify-between p-2 bg-white rounded-lg border border-blue-100">
+                                      <div className="flex-1">
+                                        <span className="font-semibold text-gray-800 text-sm">{row.keyword}</span>
+                                        <div className="text-xs text-gray-500 mt-0.5">
+                                          Position #{row.position.toFixed(1)} · {row.impressions.toLocaleString()} impressions
+                                        </div>
+                                      </div>
+                                      <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs font-semibold rounded">+{estimatedBoost} clicks</span>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          )}
+                          
+                          {/* High impressions, low CTR */}
+                          {highImpressionLowCtr.length > 0 && (
+                            <div className="bg-purple-50 border border-purple-200 rounded-xl p-4">
+                              <div className="flex items-center gap-2 mb-3">
+                                <span className="text-xl">💡</span>
+                                <div>
+                                  <h4 className="text-sm font-bold text-purple-900">Forbedr Title/Meta</h4>
+                                  <p className="text-xs text-purple-700">Høje visninger men lav CTR – optimér beskrivelser</p>
+                                </div>
+                              </div>
+                              <div className="space-y-2">
+                                {highImpressionLowCtr.map((row, i) => {
+                                  const ctr = row.impressions > 0 ? ((row.clicks / row.impressions) * 100).toFixed(1) : '0'
+                                  return (
+                                    <div key={i} className="flex items-center justify-between p-2 bg-white rounded-lg border border-purple-100">
+                                      <div className="flex-1">
+                                        <span className="font-semibold text-gray-800 text-sm">{row.keyword}</span>
+                                        <div className="text-xs text-gray-500 mt-0.5">
+                                          {row.impressions.toLocaleString()} impressions · CTR {ctr}%
+                                        </div>
+                                      </div>
+                                      <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs font-semibold rounded">Lav CTR</span>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          )}
+                          
+                          {missingHighImpression.length === 0 && lowPosition.length === 0 && highImpressionLowCtr.length === 0 && (
+                            <div className="text-center py-8 text-gray-400 text-sm">
+                              Ingen umiddelbare quick wins fundet i GSC-data. Din side performer stærkt! 🎉
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })()}
                   </div>
                 )}
 

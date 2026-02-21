@@ -14,6 +14,9 @@ export interface SeoInput {
   wordCount?: number
   internalLinks?: number
   h2Count?: number
+  hasStructuredData?: boolean
+  structuredDataTypes?: string[]
+  readabilityScore?: 'Høj' | 'Medium' | 'Lav'
 }
 
 export type KeywordStatus = 'God' | 'Optimer' | 'Mangler'
@@ -54,6 +57,7 @@ export interface SeoResult {
   keywordsFound: number
   keywordsMissing: number
   keywordsOptimise: number
+  readabilityScore: 'Høj' | 'Medium' | 'Lav'
 }
 
 // Count keyword occurrences in text (case-insensitive)
@@ -78,6 +82,13 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   const text = fullText(input)
   const allKeywords = [input.targetKeyword, ...input.semanticKeywords].filter(Boolean)
   const wordCount = input.wordCount ?? input.bodyContent.split(/\s+/).filter(Boolean).length
+  
+  // Calculate readability score
+  const bodyWords = input.bodyContent.split(/\s+/).filter(Boolean).length
+  const sentences = input.bodyContent.split(/[.!?]+/).filter(s => s.trim().length > 0).length
+  const avgWordsPerSentence = sentences > 0 ? bodyWords / sentences : 0
+  const readabilityScore: 'Høj' | 'Medium' | 'Lav' = 
+    avgWordsPerSentence < 15 ? 'Høj' : avgWordsPerSentence < 22 ? 'Medium' : 'Lav'
 
   // ── SCORE COMPONENTS (total 100 points) ──────────────────────────────────
   let score = 0
@@ -256,6 +267,17 @@ export function analyzeSeo(input: SeoInput): SeoResult {
           : 'Ingen FAQ-sektion fundet. Tilføj 3-5 spørgsmål/svar med JSON-LD structured data for bedre SERP-synlighed.'
       })(),
     },
+    {
+      id: 'structured-data',
+      label: 'Structured Data',
+      status: input.hasStructuredData ? 'ok' : 'warn',
+      statusLabel: input.hasStructuredData 
+        ? `${input.structuredDataTypes?.length || 0} schema fundet`
+        : '1 advarsel',
+      detail: input.hasStructuredData
+        ? `JSON-LD structured data fundet: ${input.structuredDataTypes?.join(', ') || 'ukendt type'}. God praksis! Overvej også FAQPage schema hvis ikke allerede tilføjet.`
+        : 'Ingen structured data fundet. Tilføj JSON-LD schema (f.eks. Product, FAQPage, Organization) for rich snippets i Google.',
+    },
   ]
 
   // ── CONTENT GAPS (dynamic based on score) ────────────────────────────────────
@@ -380,5 +402,6 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     keywordsFound,
     keywordsMissing,
     keywordsOptimise,
+    readabilityScore,
   }
 }
