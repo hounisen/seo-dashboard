@@ -270,13 +270,9 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     {
       id: 'structured-data',
       label: 'Structured Data',
-      status: input.hasStructuredData ? 'ok' : 'warn',
-      statusLabel: input.hasStructuredData 
-        ? `${input.structuredDataTypes?.length || 0} schema fundet`
-        : '1 advarsel',
-      detail: input.hasStructuredData
-        ? `JSON-LD structured data fundet: ${input.structuredDataTypes?.join(', ') || 'ukendt type'}. God praksis! Overvej også FAQPage schema hvis ikke allerede tilføjet.`
-        : 'Ingen structured data fundet. Tilføj JSON-LD schema (f.eks. Product, FAQPage, Organization) for rich snippets i Google.',
+      status: 'warn',
+      statusLabel: 'Tjek manuelt',
+      detail: `Structured data kan ikke detekteres automatisk via scraping. Tjek manuelt om du har JSON-LD schema (HotelRoom, Product, FAQPage, Organization) i din <head>. Test med Google Rich Results Test: https://search.google.com/test/rich-results`,
     },
   ]
 

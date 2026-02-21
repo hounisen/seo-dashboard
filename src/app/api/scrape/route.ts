@@ -23,7 +23,6 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         url,
         formats: ['markdown', 'html'],
-        onlyMainContent: false, // Need full HTML to find JSON-LD
       }),
     })
 
@@ -53,7 +52,7 @@ export async function POST(req: NextRequest) {
     // Try to find JSON-LD in either html or rawHtml
     const htmlToSearch = rawHtml || html
     const jsonLdMatches = htmlToSearch.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)
-    const hasStructuredData = jsonLdMatches && jsonLdMatches.length > 0
+    let hasStructuredData = jsonLdMatches && jsonLdMatches.length > 0
     const structuredDataTypes: string[] = []
     
     if (jsonLdMatches) {
@@ -69,6 +68,14 @@ export async function POST(req: NextRequest) {
           // Invalid JSON-LD, skip
         }
       })
+    }
+    
+    // Fallback: check if metadata has schema.org info
+    if (!hasStructuredData && metadata.ogType) {
+      // If we have OpenGraph but no JSON-LD detected, still mark as having *some* structured data
+      // This prevents false negatives when Firecrawl strips script tags
+      hasStructuredData = true
+      structuredDataTypes.push('OpenGraph')
     }
 
     // Count approximate word count from markdown
