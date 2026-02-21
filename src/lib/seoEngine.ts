@@ -315,11 +315,19 @@ export function analyzeSeo(input: SeoInput): SeoResult {
       detail: `Brug ${missingKeywords.slice(0, 3).join(', ')} naturligt i brødtekst, produktbeskrivelser eller FAQ.`,
     })
   }
-  quickWins.push({
-    priority: 'yellow',
-    title: 'Tilføj FAQ-sektion med JSON-LD',
-    detail: '3–5 spørgsmål og svar trigger rich snippets i Google og øger synlighed uden link-building.',
-  })
+  
+  // Only suggest FAQ if not already present
+  const allText = (input.bodyContent + input.h1 + input.pageTitle).toLowerCase()
+  const cleanText = allText.replace(/[_*#]/g, '')
+  const hasFaq = /(faq|ofte stillede spørgsmål|spørgsmål og svar|q&a|questions)/i.test(cleanText)
+  
+  if (!hasFaq) {
+    quickWins.push({
+      priority: 'yellow',
+      title: 'Tilføj FAQ-sektion med JSON-LD',
+      detail: '3–5 spørgsmål og svar trigger rich snippets i Google og øger synlighed uden link-building.',
+    })
+  }
   if (internalLinks < 3) {
     quickWins.push({
       priority: 'green',

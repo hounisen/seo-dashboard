@@ -24,7 +24,8 @@ export async function POST(req: NextRequest) {
         url,
         formats: ['markdown'],
         onlyMainContent: true,
-        excludeTags: ['script', 'style', 'nav', 'footer', 'iframe', 'noscript'],
+        excludeTags: ['script', 'style', 'nav', 'footer', 'iframe', 'noscript', 'aside', 'form'],
+        removeTags: ['button', 'svg'],
       }),
     })
 
