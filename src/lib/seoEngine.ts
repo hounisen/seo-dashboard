@@ -258,38 +258,70 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     },
   ]
 
-  // ── CONTENT GAPS (dynamic) ────────────────────────────────────────────────
+  // ── CONTENT GAPS (dynamic based on score) ────────────────────────────────────
   const missingKeywords = keywordResults.filter(k => k.status === 'Mangler').map(k => k.keyword)
-
-  const contentGaps: ContentGap[] = [
-    {
-      num: 'Gap 01 · Indholdslængde',
-      tag: '#4f7fff',
-      title: wordCount < 500 ? 'Siden er for kort' : 'Indholdsdybde',
-      description:
-        wordCount < 500
-          ? `Med kun ~${wordCount} ord er siden for tyndt indholdsalt. Konkurrenter har typisk 600–1000+ ord på tilsvarende kategorisider.`
-          : `Siden har ${wordCount} ord. Overvej at uddybe med produktspecifikke detaljer og FAQ for at styrke autoriteten.`,
-      color: '#4f7fff',
-    },
-    {
-      num: 'Gap 02 · Manglende keywords',
-      tag: '#ff7043',
-      title: missingKeywords.length > 0 ? `${missingKeywords.length} keywords mangler` : 'Semantisk dækning',
-      description:
-        missingKeywords.length > 0
-          ? `Disse keywords er ikke fundet på siden: ${missingKeywords.slice(0, 4).join(', ')}${missingKeywords.length > 4 ? ' m.fl.' : ''}. Inkludér dem naturligt i brødtekst og overskrifter.`
-          : `Alle semantiske keywords er dækket. Overvej yderligere long-tail varianter for at fange mere trafik.',`,
-      color: '#ff7043',
-    },
-    {
-      num: 'Gap 03 · Strukturerede data',
-      tag: '#2dce89',
-      title: 'FAQ + JSON-LD mangler',
-      description: `Siden mangler sandsynligvis FAQ-sektion med JSON-LD structured data. Dette trigger rich snippets i Google og øger CTR markant for B2B-søgninger.`,
-      color: '#2dce89',
-    },
-  ]
+  
+  let contentGaps: ContentGap[]
+  
+  if (percentage >= 70) {
+    // High-performing page → show advanced optimization opportunities
+    contentGaps = [
+      {
+        num: 'Optimering 01 · Avanceret keyword-strategi',
+        tag: '#4f7fff',
+        title: 'Long-tail ekspansion',
+        description: wordCount >= 800
+          ? `Siden har stærk indholdsdybde (${wordCount} ord). Næste skridt: Tilføj 3-5 long-tail spørgsmål som egne H2-sektioner for at fange niche-søgninger med lavere konkurrence.`
+          : `Siden performer godt. Overvej at udvide med yderligere ${800 - wordCount} ord der dækker long-tail varianter af dine primære keywords.`,
+        color: '#4f7fff',
+      },
+      {
+        num: 'Optimering 02 · Struktureret data',
+        tag: '#2dce89',
+        title: 'Rich snippets potentiale',
+        description: `Tilføj JSON-LD structured data utover FAQ: Product schema (hvis relevant), BreadcrumbList for bedre SERP-visning, og Organization/LocalBusiness schema for brand-autoritet.`,
+        color: '#2dce89',
+      },
+      {
+        num: 'Optimering 03 · Intern linking-strategi',
+        tag: '#ff7043',
+        title: 'Autoritet gennem silostruktur',
+        description: `Byg en content hub: Link fra 5-10 relaterede sider til denne side med keyword-rige ankertekster. Skab tematisk relevans og pagerank-flow.`,
+        color: '#ff7043',
+      },
+    ]
+  } else {
+    // Low-performing page → show gaps and problems
+    contentGaps = [
+      {
+        num: 'Gap 01 · Indholdslængde',
+        tag: '#4f7fff',
+        title: wordCount < 500 ? 'Siden er for kort' : 'Indholdsdybde',
+        description:
+          wordCount < 500
+            ? `Med kun ~${wordCount} ord er siden for tyndt indholdsalt. Konkurrenter har typisk 600–1000+ ord på tilsvarende kategorisider.`
+            : `Siden har ${wordCount} ord. Overvej at uddybe med produktspecifikke detaljer og FAQ for at styrke autoriteten.`,
+        color: '#4f7fff',
+      },
+      {
+        num: 'Gap 02 · Manglende keywords',
+        tag: '#ff7043',
+        title: missingKeywords.length > 0 ? `${missingKeywords.length} keywords mangler` : 'Semantisk dækning',
+        description:
+          missingKeywords.length > 0
+            ? `Disse keywords er ikke fundet på siden: ${missingKeywords.slice(0, 4).join(', ')}${missingKeywords.length > 4 ? ' m.fl.' : ''}. Inkludér dem naturligt i brødtekst og overskrifter.`
+            : `Alle semantiske keywords er dækket. Overvej yderligere long-tail varianter for at fange mere trafik.`,
+        color: '#ff7043',
+      },
+      {
+        num: 'Gap 03 · Strukturerede data',
+        tag: '#2dce89',
+        title: 'FAQ + JSON-LD mangler',
+        description: `Siden mangler sandsynligvis FAQ-sektion med JSON-LD structured data. Dette trigger rich snippets i Google og øger CTR markant for B2B-søgninger.`,
+        color: '#2dce89',
+      },
+    ]
+  }
 
   // ── QUICK WINS ────────────────────────────────────────────────────────────
   const quickWins: SeoResult['quickWins'] = []
