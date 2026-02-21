@@ -22,8 +22,8 @@ export async function POST(req: NextRequest) {
       },
       body: JSON.stringify({
         url,
-        formats: ['markdown', 'rawHtml'],
-        onlyMainContent: false, // Need full HTML to find JSON-LD in head
+        formats: ['markdown', 'html'],
+        onlyMainContent: false, // Need full HTML to find JSON-LD
       }),
     })
 
@@ -37,17 +37,22 @@ export async function POST(req: NextRequest) {
     // Extract useful fields from the scraped page
     const markdown: string = data.data?.markdown ?? ''
     const metadata = data.data?.metadata ?? {}
+    const html: string = data.data?.html ?? ''
     const rawHtml: string = data.data?.rawHtml ?? ''
 
-    // Debug info
+    // Debug info - check what formats Firecrawl actually returned
+    const availableFormats = Object.keys(data.data || {})
     const debugInfo = {
+      hasHtml: !!html,
+      htmlLength: html.length,
       hasRawHtml: !!rawHtml,
       rawHtmlLength: rawHtml.length,
-      formats: Object.keys(data.data || {}),
+      formats: availableFormats,
     }
 
-    // Detect structured data (JSON-LD) in the raw HTML
-    const jsonLdMatches = rawHtml.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)
+    // Try to find JSON-LD in either html or rawHtml
+    const htmlToSearch = rawHtml || html
+    const jsonLdMatches = htmlToSearch.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)
     const hasStructuredData = jsonLdMatches && jsonLdMatches.length > 0
     const structuredDataTypes: string[] = []
     
