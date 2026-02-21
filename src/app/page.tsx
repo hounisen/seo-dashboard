@@ -128,6 +128,7 @@ export default function SeoDashboard() {
   const [gscFileName, setGscFileName] = useState('')
   const [competitorAnalysis, setCompetitorAnalysis] = useState<{url: string, result: SeoResult} | null>(null)
   const [analyzingCompetitor, setAnalyzingCompetitor] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
   // Live-recalculate whenever form changes
   useEffect(() => {
@@ -172,7 +173,6 @@ export default function SeoDashboard() {
         h1: data.h1 || prev.h1,
         bodyContent: data.bodyContent || prev.bodyContent,
       }))
-      setActiveTab('dashboard')
     } catch {
       setScrapeError('Netværksfejl – tjek din forbindelse')
     } finally {
@@ -246,40 +246,40 @@ export default function SeoDashboard() {
   const pct = result?.percentage ?? 0
 
   return (
-    <div className="min-h-screen" style={{ background: '#f0f2f5', fontFamily: 'Inter, sans-serif' }}>
+    <div className="min-h-screen flex flex-col" style={{ background: '#f0f2f5', fontFamily: 'Inter, sans-serif' }}>
       {/* ── Top nav ── */}
       <nav className="bg-white border-b border-gray-100 sticky top-0 z-50 shadow-sm">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
+        <div className="px-4 sm:px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg flex items-center justify-center text-sm"
               style={{ background: '#4f7fff', color: '#fff' }}>S</div>
             <span className="font-semibold text-sm text-gray-800">SEO Dashboard</span>
           </div>
-          <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
-            {(['form', 'dashboard'] as const).map(tab => (
-              <button key={tab} onClick={() => setActiveTab(tab)}
-                className={`px-4 py-1.5 rounded-md text-xs font-semibold transition-all ${
-                  activeTab === tab ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-                }`}>
-                {tab === 'form' ? '⚙ Indstillinger' : '📊 Dashboard'}
-              </button>
-            ))}
-          </div>
           {result && (
-            <div className="flex items-center gap-2 text-sm">
-              <span className={`font-bold tabular-nums ${pct >= 70 ? 'text-emerald-600' : pct >= 45 ? 'text-amber-600' : 'text-red-500'}`}>
-                {pct}%
-              </span>
-              <span className="text-gray-400 text-xs">SEO Score</span>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 text-sm">
+                <span className={`font-bold tabular-nums ${pct >= 70 ? 'text-emerald-600' : pct >= 45 ? 'text-amber-600' : 'text-red-500'}`}>
+                  {pct}%
+                </span>
+                <span className="text-gray-400 text-xs">SEO Score</span>
+              </div>
+              <button
+                onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+                className="px-3 py-1.5 text-xs font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition"
+              >
+                {sidebarCollapsed ? '← Vis indstillinger' : 'Skjul indstillinger →'}
+              </button>
             </div>
           )}
         </div>
       </nav>
 
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
-        {/* ── FORM TAB ── */}
-        {activeTab === 'form' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-fade-up">
+      {/* ── SPLIT VIEW LAYOUT ── */}
+      <div className="flex-1 flex overflow-hidden">
+        
+        {/* LEFT SIDEBAR - Settings (40%) */}
+        <div className={`${sidebarCollapsed ? 'w-0' : 'w-full lg:w-[40%]'} overflow-y-auto border-r border-gray-200 bg-white transition-all duration-300`}>
+          <div className={`${sidebarCollapsed ? 'hidden' : 'block'} p-6 space-y-6`}>
 
             {/* URL + Scrape */}
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 lg:col-span-2">
@@ -505,23 +505,19 @@ export default function SeoDashboard() {
               </div>
             )}
           </div>
-        )}
+        </div>
 
-        {/* ── DASHBOARD TAB ── */}
-        {activeTab === 'dashboard' && (
-          <div className="space-y-5">
+        {/* RIGHT PANEL - Results (60%) */}
+        <div className="flex-1 overflow-y-auto bg-gray-50 p-6">
+          <div className="max-w-5xl mx-auto space-y-5">
             {!result ? (
               <div className="bg-white rounded-2xl p-12 text-center shadow-sm border border-gray-100">
-                <p className="text-gray-400 text-sm">Udfyld mindst et target keyword for at se analysen.</p>
-                <button onClick={() => setActiveTab('form')}
-                  className="mt-4 px-6 py-2.5 rounded-xl text-white text-sm font-semibold"
-                  style={{ background: '#4f7fff' }}>
-                  Gå til indstillinger →
-                </button>
+                <p className="text-gray-400 text-sm">Udfyld target keyword og scrape URL for at se analysen.</p>
+                <p className="text-gray-500 text-xs mt-2">Resultaterne vises live her mens du ændrer indstillinger ←</p>
               </div>
             ) : (
               <>
-                {/* Score card */}
+                {/* Score Ring */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up">
                   <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">SEO Score</p>
                   <div className="flex items-start gap-6">
@@ -965,21 +961,13 @@ export default function SeoDashboard() {
                     ))}
                   </div>
                 </div>
-
-                {/* Back to edit button */}
-                <div className="flex justify-center pt-2">
-                  <button onClick={() => setActiveTab('form')}
-                    className="text-xs text-gray-400 hover:text-gray-600 transition underline underline-offset-2">
-                    ← Redigér indstillinger
-                  </button>
-                </div>
               </>
             )}
           </div>
-        )}
+        </div>
       </div>
 
-      <footer className="text-center py-8 text-xs text-gray-300 tracking-widest uppercase">
+      <footer className="bg-white border-t border-gray-100 py-3 text-center text-xs text-gray-400">
         SEO Dashboard · Hounisen · {new Date().getFullYear()}
       </footer>
     </div>
