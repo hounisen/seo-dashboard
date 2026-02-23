@@ -83,12 +83,17 @@ export async function POST(req: NextRequest) {
     // Clean markdown: remove navigation, footer, social widgets but keep all main content
     let cleanedMarkdown = markdown
     
-    // Remove common junk patterns
+    // STEP 1: Remove everything BEFORE the main H1 heading (navigation, login modal, menu)
+    const h1Match = cleanedMarkdown.match(/^# [A-ZÆØÅ]/m)
+    if (h1Match && h1Match.index) {
+      cleanedMarkdown = cleanedMarkdown.substring(h1Match.index)
+    }
+    
+    // STEP 2: Remove specific junk patterns
     const junkPatterns = [
-      /!\[.*?\]\(.*?svg\).*?Go to top/gi, // "Go to top" buttons with SVGs
-      /^-\s*\[Forside\].*?^-\s*[A-ZÆØÅ].*?\n/gm, // Breadcrumb navigation (multiple lines starting with "- [")
       /Dansk support.*?Faguddannet personale/g, // USP boxes with icons
       /Bliv en del af.*?Handelsbetingelser\./g, // Newsletter signup footer
+      /#### Laboratorieudstyr.*$/gs, // Footer menu sections (everything after)
       /!\[\]\(https:\/\/www\..*?\)\s*\n\s*\n/g, // Empty image placeholders
     ]
     
