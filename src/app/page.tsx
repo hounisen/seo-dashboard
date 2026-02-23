@@ -172,6 +172,7 @@ export default function SeoDashboard() {
         metaDescription: data.description || prev.metaDescription,
         h1: data.h1 || prev.h1,
         bodyContent: data.bodyContent || prev.bodyContent,
+        // semanticKeywords: Keep existing - user manages manually
       }))
     } catch {
       setScrapeError('Netværksfejl – tjek din forbindelse')
@@ -310,6 +311,29 @@ export default function SeoDashboard() {
                       Henter...
                     </span>
                   ) : '🔍 Scrape side'}
+                </button>
+                <button
+                  onClick={() => {
+                    if (confirm('Ryd alle felter og start forfra?')) {
+                      setForm({
+                        url: '',
+                        targetKeyword: '',
+                        semanticKeywords: [],
+                        pageTitle: '',
+                        metaDescription: '',
+                        h1: '',
+                        bodyContent: '',
+                        competitorUrls: [],
+                      })
+                      setGscData([])
+                      setGscFileName('')
+                      setCompetitorAnalysis(null)
+                      setScrapeError('')
+                    }
+                  }}
+                  className="px-6 py-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-semibold transition-all active:scale-95"
+                  title="Ryd alle felter">
+                  🗑️ Ryd alt
                 </button>
               </div>
               {scrapeError && (

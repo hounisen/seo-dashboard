@@ -89,11 +89,15 @@ export async function POST(req: NextRequest) {
       cleanedMarkdown = cleanedMarkdown.substring(navigationEndMatch.index)
     }
     
-    // STEP 2: Remove specific junk patterns
+    // STEP 2: Remove everything AFTER newsletter signup (footer starts there)
+    const footerStartMatch = cleanedMarkdown.match(/## Bliv en del af/m)
+    if (footerStartMatch && footerStartMatch.index) {
+      cleanedMarkdown = cleanedMarkdown.substring(0, footerStartMatch.index)
+    }
+    
+    // STEP 3: Remove specific junk patterns
     const junkPatterns = [
       /Dansk support.*?Faguddannet personale/g, // USP boxes with icons
-      /Bliv en del af.*?Handelsbetingelser\./g, // Newsletter signup footer
-      /#### Laboratorieudstyr.*$/gm, // Footer menu sections (multiline)
       /!\[\]\(https:\/\/www\..*?\)\s*\n\s*\n/g, // Empty image placeholders
     ]
     

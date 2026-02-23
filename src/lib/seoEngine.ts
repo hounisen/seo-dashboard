@@ -60,11 +60,15 @@ export interface SeoResult {
   readabilityScore: 'Høj' | 'Medium' | 'Lav'
 }
 
-// Count keyword occurrences in text (case-insensitive)
+// Count keyword occurrences in text (case-insensitive, flexible spacing)
 function countOccurrences(text: string, keyword: string): number {
   if (!text || !keyword) return 0
-  const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const matches = text.toLowerCase().match(new RegExp(escaped.toLowerCase(), 'g'))
+  
+  // Normalize spaces in keyword and text for flexible matching
+  const normalizedKeyword = keyword.toLowerCase().trim().replace(/\s+/g, '\\s*')
+  const normalizedText = text.toLowerCase()
+  
+  const matches = normalizedText.match(new RegExp(normalizedKeyword, 'g'))
   return matches ? matches.length : 0
 }
 
