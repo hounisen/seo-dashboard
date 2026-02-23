@@ -318,7 +318,7 @@ export default function SeoDashboard() {
                       setForm({
                         url: '',
                         targetKeyword: '',
-                        semanticKeywords: [],
+                        semanticKeywords: '',
                         pageTitle: '',
                         metaDescription: '',
                         h1: '',
