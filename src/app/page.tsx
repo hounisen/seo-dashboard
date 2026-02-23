@@ -323,7 +323,7 @@ export default function SeoDashboard() {
                         metaDescription: '',
                         h1: '',
                         bodyContent: '',
-                        competitorUrls: [],
+                        competitorUrls: '',
                       })
                       setGscData([])
                       setGscFileName('')
