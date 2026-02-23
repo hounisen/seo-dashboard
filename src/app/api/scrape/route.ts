@@ -84,16 +84,16 @@ export async function POST(req: NextRequest) {
     let cleanedMarkdown = markdown
     
     // STEP 1: Remove everything BEFORE the main H1 heading (navigation, login modal, menu)
-    const h1Match = cleanedMarkdown.match(/^# [A-ZÆØÅ]/m)
-    if (h1Match && h1Match.index) {
-      cleanedMarkdown = cleanedMarkdown.substring(h1Match.index)
+    const navigationEndMatch = cleanedMarkdown.match(/^# [A-ZÆØÅ]/m)
+    if (navigationEndMatch && navigationEndMatch.index) {
+      cleanedMarkdown = cleanedMarkdown.substring(navigationEndMatch.index)
     }
     
     // STEP 2: Remove specific junk patterns
     const junkPatterns = [
       /Dansk support.*?Faguddannet personale/g, // USP boxes with icons
       /Bliv en del af.*?Handelsbetingelser\./g, // Newsletter signup footer
-      /#### Laboratorieudstyr.*$/gs, // Footer menu sections (everything after)
+      /#### Laboratorieudstyr.*$/gm, // Footer menu sections (multiline)
       /!\[\]\(https:\/\/www\..*?\)\s*\n\s*\n/g, // Empty image placeholders
     ]
     
