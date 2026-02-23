@@ -23,6 +23,8 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         url,
         formats: ['markdown', 'html'],
+        onlyMainContent: false, // Get ALL content, we'll filter ourselves
+        waitFor: 3000, // Wait 3 seconds for JavaScript to render
       }),
     })
 
@@ -78,8 +80,27 @@ export async function POST(req: NextRequest) {
       structuredDataTypes.push('OpenGraph')
     }
 
-    // Count approximate word count from markdown
-    const wordCount = markdown.split(/\s+/).filter(Boolean).length
+    // Clean markdown: remove navigation, footer, social widgets but keep all main content
+    let cleanedMarkdown = markdown
+    
+    // Remove common junk patterns
+    const junkPatterns = [
+      /!\[.*?\]\(.*?svg\).*?Go to top/gi, // "Go to top" buttons with SVGs
+      /^-\s*\[Forside\].*?^-\s*[A-ZÆØÅ].*?\n/gms, // Breadcrumb navigation (multiple lines starting with "- [")
+      /Dansk support.*?Faguddannet personale/gs, // USP boxes with icons
+      /Bliv en del af.*?Handelsbetingelser\./gs, // Newsletter signup footer
+      /!\[\]\(https:\/\/www\..*?\)\s*\n\s*\n/g, // Empty image placeholders
+    ]
+    
+    junkPatterns.forEach(pattern => {
+      cleanedMarkdown = cleanedMarkdown.replace(pattern, '')
+    })
+    
+    // Remove excessive newlines (more than 2 consecutive)
+    cleanedMarkdown = cleanedMarkdown.replace(/\n{3,}/g, '\n\n').trim()
+
+    // Count approximate word count from cleaned markdown
+    const wordCount = cleanedMarkdown.split(/\s+/).filter(Boolean).length
 
     // Extract H1 from metadata or first # in markdown
     const h1Match = markdown.match(/^#\s+(.+)$/m)
@@ -109,7 +130,7 @@ export async function POST(req: NextRequest) {
       title: metadata.title ?? '',
       description,
       h1,
-      bodyContent: markdown,
+      bodyContent: cleanedMarkdown,
       wordCount,
       internalLinks,
       h2Count,
