@@ -86,9 +86,9 @@ export async function POST(req: NextRequest) {
     // Remove common junk patterns
     const junkPatterns = [
       /!\[.*?\]\(.*?svg\).*?Go to top/gi, // "Go to top" buttons with SVGs
-      /^-\s*\[Forside\].*?^-\s*[A-ZÆØÅ].*?\n/gms, // Breadcrumb navigation (multiple lines starting with "- [")
-      /Dansk support.*?Faguddannet personale/gs, // USP boxes with icons
-      /Bliv en del af.*?Handelsbetingelser\./gs, // Newsletter signup footer
+      /^-\s*\[Forside\].*?^-\s*[A-ZÆØÅ].*?\n/gm, // Breadcrumb navigation (multiple lines starting with "- [")
+      /Dansk support.*?Faguddannet personale/g, // USP boxes with icons
+      /Bliv en del af.*?Handelsbetingelser\./g, // Newsletter signup footer
       /!\[\]\(https:\/\/www\..*?\)\s*\n\s*\n/g, // Empty image placeholders
     ]
     
