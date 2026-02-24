@@ -126,7 +126,7 @@ export default function SeoDashboard() {
   const [activeTab, setActiveTab] = useState<'form' | 'dashboard'>('form')
   const [gscData, setGscData] = useState<GscData[]>([])
   const [gscFileName, setGscFileName] = useState('')
-  const [competitorAnalysis, setCompetitorAnalysis] = useState<{url: string, result: SeoResult} | null>(null)
+  const [competitorAnalysis, setCompetitorAnalysis] = useState<{url: string, result: SeoResult}[]>([])
   const [analyzingCompetitor, setAnalyzingCompetitor] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
@@ -210,33 +210,49 @@ export default function SeoDashboard() {
     reader.readAsText(file)
   }, [])
 
-  // Analyze competitor
+  // Analyze competitor(s) - up to 2 competitors
   const analyzeCompetitor = useCallback(async () => {
-    const competitorUrl = form.competitorUrls.split('\n')[0]?.trim()
-    if (!competitorUrl || !form.targetKeyword) return
+    const competitorUrls = form.competitorUrls
+      .split('\n')
+      .map(u => u.trim())
+      .filter(Boolean)
+      .slice(0, 2) // Max 2 competitors
+    
+    if (competitorUrls.length === 0 || !form.targetKeyword) return
     
     setAnalyzingCompetitor(true)
     try {
-      const res = await fetch('/api/scrape', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: competitorUrl }),
-      })
-      const data = await res.json()
-      if (!res.ok || data.error) return
+      // Scrape all competitors in parallel
+      const results = await Promise.all(
+        competitorUrls.map(async (competitorUrl) => {
+          try {
+            const res = await fetch('/api/scrape', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ url: competitorUrl }),
+            })
+            const data = await res.json()
+            if (!res.ok || data.error) return null
+            
+            const competitorInput: SeoInput = {
+              url: competitorUrl,
+              competitorUrls: [],
+              targetKeyword: form.targetKeyword.trim(),
+              semanticKeywords: form.semanticKeywords.split(',').map(s => s.trim()).filter(Boolean),
+              pageTitle: data.title || '',
+              metaDescription: data.description || '',
+              h1: data.h1 || '',
+              bodyContent: data.bodyContent || '',
+            }
+            const competitorResult = analyzeSeo(competitorInput)
+            return { url: competitorUrl, result: competitorResult }
+          } catch {
+            return null
+          }
+        })
+      )
       
-      const competitorInput: SeoInput = {
-        url: competitorUrl,
-        competitorUrls: [],
-        targetKeyword: form.targetKeyword.trim(),
-        semanticKeywords: form.semanticKeywords.split(',').map(s => s.trim()).filter(Boolean),
-        pageTitle: data.title || '',
-        metaDescription: data.description || '',
-        h1: data.h1 || '',
-        bodyContent: data.bodyContent || '',
-      }
-      const competitorResult = analyzeSeo(competitorInput)
-      setCompetitorAnalysis({ url: competitorUrl, result: competitorResult })
+      setCompetitorAnalysis(results.filter(Boolean) as {url: string, result: SeoResult}[])
     } catch {
       // Silent fail
     } finally {
@@ -328,7 +344,7 @@ export default function SeoDashboard() {
                       })
                       setGscData([])
                       setGscFileName('')
-                      setCompetitorAnalysis(null)
+                      setCompetitorAnalysis([])
                       setScrapeError('')
                     }
                   }}
@@ -582,7 +598,7 @@ export default function SeoDashboard() {
                 </div>
 
                 {/* Competitor comparison */}
-                {competitorAnalysis && (
+                {competitorAnalysis.length > 0 && (
                   <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-1">
                     <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">
                       Konkurrent-Sammenligning (Benchmarks)
@@ -595,34 +611,46 @@ export default function SeoDashboard() {
                           <tr className="border-b-2 border-gray-200">
                             <th className="text-left text-xs font-bold tracking-widest uppercase text-gray-400 pb-3 px-3">Metrik</th>
                             <th className="text-center text-xs font-bold tracking-widest uppercase text-blue-600 pb-3 px-3">Din Side</th>
-                            <th className="text-center text-xs font-bold tracking-widest uppercase text-gray-600 pb-3 px-3">Konkurrent</th>
+                            {competitorAnalysis.map((comp, i) => (
+                              <th key={i} className="text-center text-xs font-bold tracking-widest uppercase text-gray-600 pb-3 px-3">
+                                Konkurrent {i + 1}
+                              </th>
+                            ))}
                           </tr>
                         </thead>
                         <tbody>
                           <tr className="border-b border-gray-100">
                             <td className="py-3 px-3 text-gray-600 font-medium">Ordantal</td>
                             <td className="py-3 px-3 text-center">
-                              <span className={`font-bold ${(result?.wordCount || 0) >= competitorAnalysis.result.wordCount ? 'text-emerald-600' : 'text-amber-600'}`}>
+                              <span className={`font-bold ${(result?.wordCount || 0) >= Math.max(...competitorAnalysis.map(c => c.result.wordCount)) ? 'text-emerald-600' : 'text-amber-600'}`}>
                                 {result?.wordCount || 0}
                               </span>
                             </td>
-                            <td className="py-3 px-3 text-center text-gray-700 font-semibold">
-                              {competitorAnalysis.result.wordCount}
-                            </td>
+                            {competitorAnalysis.map((comp, i) => (
+                              <td key={i} className="py-3 px-3 text-center text-gray-700 font-semibold">
+                                {comp.result.wordCount}
+                              </td>
+                            ))}
                           </tr>
                           <tr className="border-b border-gray-100">
-                            <td className="py-3 px-3 text-gray-600 font-medium">Semantiske Keywords</td>
+                            <td className="py-3 px-3 text-gray-600 font-medium">Keywords Dækket</td>
                             <td className="py-3 px-3 text-center">
                               <span className="font-bold text-emerald-600">{result?.keywordsFound || 0}/{(result?.keywordsFound || 0) + (result?.keywordsMissing || 0)}</span>
                             </td>
-                            <td className="py-3 px-3 text-center text-gray-700 font-semibold">
-                              {competitorAnalysis.result.keywordsFound}/{competitorAnalysis.result.keywordsFound + competitorAnalysis.result.keywordsMissing}
-                            </td>
+                            {competitorAnalysis.map((comp, i) => (
+                              <td key={i} className="py-3 px-3 text-center text-gray-700 font-semibold">
+                                {comp.result.keywordsFound}/{comp.result.keywordsFound + comp.result.keywordsMissing}
+                              </td>
+                            ))}
                           </tr>
                           <tr className="border-b border-gray-100">
                             <td className="py-3 px-3 text-gray-600 font-medium">Readability</td>
                             <td className="py-3 px-3 text-center font-bold text-gray-800">{result?.readabilityScore || 'Medium'}</td>
-                            <td className="py-3 px-3 text-center text-gray-700 font-semibold">{competitorAnalysis.result.readabilityScore}</td>
+                            {competitorAnalysis.map((comp, i) => (
+                              <td key={i} className="py-3 px-3 text-center text-gray-700 font-semibold">
+                                {comp.result.readabilityScore}
+                              </td>
+                            ))}
                           </tr>
                           <tr className="border-b border-gray-100">
                             <td className="py-3 px-3 text-gray-600 font-medium">Structured Data</td>
@@ -633,24 +661,28 @@ export default function SeoDashboard() {
                                 <span className="text-red-500 font-bold">✗</span>
                               )}
                             </td>
-                            <td className="py-3 px-3 text-center">
-                              {competitorAnalysis.result.recommendations.find(r => r.id === 'structured-data')?.status === 'ok' ? (
-                                <span className="text-emerald-600 font-bold">✓</span>
-                              ) : (
-                                <span className="text-red-500 font-bold">✗</span>
-                              )}
-                            </td>
+                            {competitorAnalysis.map((comp, i) => (
+                              <td key={i} className="py-3 px-3 text-center">
+                                {comp.result.recommendations.find(r => r.id === 'structured-data')?.status === 'ok' ? (
+                                  <span className="text-emerald-600 font-bold">✓</span>
+                                ) : (
+                                  <span className="text-red-500 font-bold">✗</span>
+                                )}
+                              </td>
+                            ))}
                           </tr>
                           <tr>
                             <td className="py-3 px-3 text-gray-600 font-medium">SEO Score</td>
                             <td className="py-3 px-3 text-center">
-                              <span className={`text-2xl font-bold ${pct >= competitorAnalysis.result.percentage ? 'text-emerald-600' : 'text-amber-600'}`}>
+                              <span className={`text-2xl font-bold ${pct >= Math.max(...competitorAnalysis.map(c => c.result.percentage)) ? 'text-emerald-600' : 'text-amber-600'}`}>
                                 {pct}%
                               </span>
                             </td>
-                            <td className="py-3 px-3 text-center text-gray-700 text-2xl font-bold">
-                              {competitorAnalysis.result.percentage}%
-                            </td>
+                            {competitorAnalysis.map((comp, i) => (
+                              <td key={i} className="py-3 px-3 text-center text-gray-700 text-2xl font-bold">
+                                {comp.result.percentage}%
+                              </td>
+                            ))}
                           </tr>
                         </tbody>
                       </table>
@@ -660,23 +692,33 @@ export default function SeoDashboard() {
                     <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm">
                       <div className="font-semibold text-blue-900 mb-2">📊 Nøgleindsigter:</div>
                       <ul className="text-blue-800 space-y-1.5 ml-4 list-disc">
-                        {competitorAnalysis.result.wordCount > (result?.wordCount || 0) && (
-                          <li>Konkurrenten har <strong>{competitorAnalysis.result.wordCount - (result?.wordCount || 0)} flere ord</strong> – overvej at uddybe indholdet</li>
-                        )}
-                        {(result?.wordCount || 0) > competitorAnalysis.result.wordCount && (
-                          <li className="text-emerald-700"><strong>✓ Du har dybere indhold</strong> med {(result?.wordCount || 0) - competitorAnalysis.result.wordCount} flere ord</li>
-                        )}
-                        {(result?.keywordsFound || 0) > competitorAnalysis.result.keywordsFound && (
-                          <li className="text-emerald-700"><strong>✓ Bedre keyword-dækning</strong> – du dækker {(result?.keywordsFound || 0) - competitorAnalysis.result.keywordsFound} flere semantiske keywords</li>
-                        )}
-                        {competitorAnalysis.result.keywordsFound > (result?.keywordsFound || 0) && (
-                          <li>Konkurrenten dækker <strong>{competitorAnalysis.result.keywordsFound - (result?.keywordsFound || 0)} flere keywords</strong></li>
-                        )}
-                        {pct > competitorAnalysis.result.percentage ? (
-                          <li className="text-emerald-700"><strong>✓ Du ligger foran!</strong> Din side scorer {pct - competitorAnalysis.result.percentage} point højere samlet</li>
-                        ) : pct < competitorAnalysis.result.percentage && (
-                          <li>Konkurrenten scorer <strong>{competitorAnalysis.result.percentage - pct} point højere</strong> samlet</li>
-                        )}
+                        {(() => {
+                          const maxCompWordCount = Math.max(...competitorAnalysis.map(c => c.result.wordCount))
+                          const maxCompKeywords = Math.max(...competitorAnalysis.map(c => c.result.keywordsFound))
+                          const maxCompScore = Math.max(...competitorAnalysis.map(c => c.result.percentage))
+                          
+                          return (
+                            <>
+                              {maxCompWordCount > (result?.wordCount || 0) && (
+                                <li>Top konkurrent har <strong>{maxCompWordCount - (result?.wordCount || 0)} flere ord</strong> – overvej at uddybe indholdet</li>
+                              )}
+                              {(result?.wordCount || 0) > maxCompWordCount && (
+                                <li className="text-emerald-700"><strong>✓ Du har dybere indhold</strong> end alle konkurrenter med {(result?.wordCount || 0) - maxCompWordCount} flere ord</li>
+                              )}
+                              {(result?.keywordsFound || 0) > maxCompKeywords && (
+                                <li className="text-emerald-700"><strong>✓ Bedre keyword-dækning</strong> – du dækker {(result?.keywordsFound || 0) - maxCompKeywords} flere keywords end top konkurrent</li>
+                              )}
+                              {maxCompKeywords > (result?.keywordsFound || 0) && (
+                                <li>Top konkurrent dækker <strong>{maxCompKeywords - (result?.keywordsFound || 0)} flere keywords</strong></li>
+                              )}
+                              {pct > maxCompScore ? (
+                                <li className="text-emerald-700"><strong>✓ Du ligger foran!</strong> Din side scorer {pct - maxCompScore} point højere end den bedste konkurrent</li>
+                              ) : pct < maxCompScore && (
+                                <li>Top konkurrent scorer <strong>{maxCompScore - pct} point højere</strong> samlet</li>
+                              )}
+                            </>
+                          )
+                        })()}
                       </ul>
                     </div>
                   </div>
@@ -753,36 +795,6 @@ export default function SeoDashboard() {
                   </div>
                 </div>
 
-                {/* Custom Keywords section */}
-                {form.customKeywords && (
-                  <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-3">
-                    <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">Custom Keyword-kombinationer</p>
-                    <div className="flex flex-wrap gap-2 mb-4">
-                      {form.customKeywords.split(',').map(kw => kw.trim()).filter(Boolean).map((kw, i) => {
-                        const text = [form.pageTitle, form.metaDescription, form.h1, form.bodyContent].join(' ').toLowerCase()
-                        const count = (text.match(new RegExp(kw.toLowerCase(), 'g')) || []).length
-                        const status = count === 0 ? 'red' : count < 2 ? 'yellow' : 'green'
-                        return (
-                          <span key={i}
-                            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-transform hover:scale-105 ${
-                              status === 'green'
-                                ? 'bg-emerald-50 text-emerald-700'
-                                : status === 'yellow'
-                                ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                : 'bg-red-50 text-red-600 border border-red-200'
-                            }`}>
-                            {kw}
-                            {status === 'green' && <span className="text-emerald-500">✓</span>}
-                            {count > 0 && status !== 'green' && (
-                              <span className="bg-black/10 rounded-full px-1.5">{count}×</span>
-                            )}
-                          </span>
-                        )
-                      })}
-                    </div>
-                    <p className="text-xs text-gray-400">Disse keyword-kombinationer tæller <strong>ikke</strong> i den samlede SEO-score, men viser om du dækker long-tail varianter.</p>
-                  </div>
-                )}
 
                 {/* GSC Data comparison */}
                 {gscData.length > 0 && (
@@ -986,6 +998,73 @@ export default function SeoDashboard() {
                     ))}
                   </div>
                 </div>
+
+                {/* Keyword Sections */}
+                {(() => {
+                  const optimizeKeywords = result.keywords.filter(k => k.status === 'Optimer')
+                  const missingKeywords = result.keywords.filter(k => k.status === 'Mangler')
+                  const customKeywordsArray = form.customKeywords.split(',').map(k => k.trim()).filter(Boolean)
+                  
+                  return (
+                    <>
+                      {/* USE THESE KEYWORDS MORE */}
+                      {optimizeKeywords.length > 0 && (
+                        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-5">
+                          <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">Use These Keywords More</p>
+                          <div className="flex flex-wrap gap-2">
+                            {optimizeKeywords.map((kw, i) => (
+                              <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                                {kw.keyword}
+                                <span className="text-amber-500">({kw.currentCount})</span>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* CONSIDER SEMANTIC RICH KEYWORDS */}
+                      {missingKeywords.length > 0 && (
+                        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-6">
+                          <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">Consider Semantic Rich Keywords</p>
+                          <div className="flex flex-wrap gap-2">
+                            {missingKeywords.map((kw, i) => (
+                              <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-red-50 text-red-600 border border-red-200">
+                                {kw.keyword}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* CUSTOM KEYWORDS */}
+                      {customKeywordsArray.length > 0 && (
+                        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-7">
+                          <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">Custom Keywords</p>
+                          <div className="flex flex-wrap gap-2">
+                            {customKeywordsArray.map((kw, i) => {
+                              const text = [form.pageTitle, form.metaDescription, form.h1, form.bodyContent].join(' ').toLowerCase()
+                              const normalizedKeyword = kw.toLowerCase().trim().replace(/\s+/g, '\\s*')
+                              const matches = text.match(new RegExp(normalizedKeyword, 'g'))
+                              const count = matches ? matches.length : 0
+                              const found = count > 0
+                              
+                              return (
+                                <span key={i} className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold ${
+                                  found 
+                                    ? 'bg-emerald-50 text-emerald-700' 
+                                    : 'bg-red-50 text-red-600 border border-red-200'
+                                }`}>
+                                  {kw}
+                                  {found && <span className="text-emerald-500">✓</span>}
+                                </span>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )
+                })()}
               </>
             )}
           </div>
