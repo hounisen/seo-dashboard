@@ -319,6 +319,7 @@ export default function SeoDashboard() {
                         url: '',
                         targetKeyword: '',
                         semanticKeywords: '',
+                        customKeywords: '',
                         pageTitle: '',
                         metaDescription: '',
                         h1: '',
