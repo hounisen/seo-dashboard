@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { analyzeSeo, SeoInput, SeoResult, KeywordStatus } from '@/lib/seoEngine'
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -10,6 +10,14 @@ interface FormState {
   targetKeyword: string
   semanticKeywords: string
   customKeywords: string
+  pageTitle: string
+  metaDescription: string
+  h1: string
+  bodyContent: string
+}
+
+// Snapshot of scraped content – never changes after scrape
+interface ScrapedSnapshot {
   pageTitle: string
   metaDescription: string
   h1: string
@@ -115,15 +123,210 @@ function ProgressBar({ pct }: { pct: number }) {
   )
 }
 
+// ── Live Editor Panel ─────────────────────────────────────────────────────────
+interface LiveEditorProps {
+  scraped: ScrapedSnapshot
+  form: FormState
+  updateForm: (key: keyof FormState, val: string) => void
+  result: SeoResult | null
+  originalResult: SeoResult | null
+}
+
+function ScoreDelta({ current, original }: { current: number; original: number }) {
+  const delta = current - original
+  if (delta === 0) return null
+  return (
+    <span className={`ml-2 text-xs font-bold px-1.5 py-0.5 rounded ${delta > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
+      {delta > 0 ? `+${delta}` : delta}%
+    </span>
+  )
+}
+
+function LiveEditor({ scraped, form, updateForm, result, originalResult }: LiveEditorProps) {
+  const pct = result?.percentage ?? 0
+  const origPct = originalResult?.percentage ?? 0
+  const delta = pct - origPct
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+      {/* Header */}
+      <div className="px-6 py-4 border-b border-gray-100" style={{ background: 'linear-gradient(135deg, #f8f9ff 0%, #eef2ff 100%)' }}>
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs font-bold tracking-widest uppercase text-indigo-400 mb-0.5">Live Tekst Editor</p>
+            <p className="text-xs text-gray-500">Rediger direkte herunder – scoren opdateres øjeblikkeligt</p>
+          </div>
+          {originalResult && (
+            <div className="text-right">
+              <div className="flex items-center gap-2 justify-end">
+                <span className="text-xs text-gray-400">Score</span>
+                <span className={`text-2xl font-extrabold tabular-nums ${pct >= 70 ? 'text-emerald-600' : pct >= 45 ? 'text-amber-600' : 'text-red-500'}`}>{pct}%</span>
+                {delta !== 0 && (
+                  <span className={`text-sm font-bold px-2 py-0.5 rounded-full ${delta > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
+                    {delta > 0 ? `▲ +${delta}` : `▼ ${delta}`}
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-gray-400 mt-0.5">Originalt: {origPct}%</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="p-6 space-y-5">
+        {/* Title */}
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Title Tag</label>
+            <div className="flex items-center gap-2">
+              {originalResult && result && (
+                <ScoreDelta
+                  current={result.recommendations.find(r => r.id === 'title')?.status === 'ok' ? 15 : result.recommendations.find(r => r.id === 'title')?.status === 'warn' ? 10 : 0}
+                  original={originalResult.recommendations.find(r => r.id === 'title')?.status === 'ok' ? 15 : originalResult.recommendations.find(r => r.id === 'title')?.status === 'warn' ? 10 : 0}
+                />
+              )}
+              <span className={`text-xs tabular-nums font-semibold ${form.pageTitle.length > 65 ? 'text-red-400' : form.pageTitle.length >= 30 ? 'text-emerald-500' : 'text-gray-400'}`}>
+                {form.pageTitle.length}/65
+              </span>
+            </div>
+          </div>
+          {scraped.pageTitle && scraped.pageTitle !== form.pageTitle && (
+            <p className="text-xs text-gray-400 mb-1.5 line-through truncate" title="Original">
+              {scraped.pageTitle}
+            </p>
+          )}
+          <input
+            type="text"
+            value={form.pageTitle}
+            onChange={e => updateForm('pageTitle', e.target.value)}
+            className={`w-full px-4 py-3 rounded-xl border text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 transition ${
+              scraped.pageTitle && scraped.pageTitle !== form.pageTitle
+                ? 'border-indigo-200 bg-indigo-50/30'
+                : 'border-gray-200'
+            }`}
+            placeholder="Skriv din title tag..."
+          />
+        </div>
+
+        {/* Meta description */}
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Meta Description</label>
+            <span className={`text-xs tabular-nums font-semibold ${form.metaDescription.length > 160 ? 'text-red-400' : form.metaDescription.length >= 120 ? 'text-emerald-500' : 'text-gray-400'}`}>
+              {form.metaDescription.length}/160
+            </span>
+          </div>
+          {scraped.metaDescription && scraped.metaDescription !== form.metaDescription && (
+            <p className="text-xs text-gray-400 mb-1.5 line-through line-clamp-2" title="Original">
+              {scraped.metaDescription}
+            </p>
+          )}
+          <textarea
+            rows={3}
+            value={form.metaDescription}
+            onChange={e => updateForm('metaDescription', e.target.value)}
+            className={`w-full px-4 py-3 rounded-xl border text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 transition resize-none ${
+              scraped.metaDescription && scraped.metaDescription !== form.metaDescription
+                ? 'border-indigo-200 bg-indigo-50/30'
+                : 'border-gray-200'
+            }`}
+            placeholder="Skriv din meta description..."
+          />
+        </div>
+
+        {/* H1 */}
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-bold text-gray-600 uppercase tracking-wide">H1 Overskrift</label>
+          </div>
+          {scraped.h1 && scraped.h1 !== form.h1 && (
+            <p className="text-xs text-gray-400 mb-1.5 line-through truncate" title="Original">
+              {scraped.h1}
+            </p>
+          )}
+          <input
+            type="text"
+            value={form.h1}
+            onChange={e => updateForm('h1', e.target.value)}
+            className={`w-full px-4 py-3 rounded-xl border text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 transition ${
+              scraped.h1 && scraped.h1 !== form.h1
+                ? 'border-indigo-200 bg-indigo-50/30'
+                : 'border-gray-200'
+            }`}
+            placeholder="Skriv din H1..."
+          />
+        </div>
+
+        {/* Body content */}
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Brødtekst / Indhold</label>
+            <div className="flex items-center gap-2">
+              {result && originalResult && result.wordCount !== originalResult.wordCount && (
+                <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${result.wordCount > originalResult.wordCount ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
+                  {result.wordCount > originalResult.wordCount ? '+' : ''}{result.wordCount - originalResult.wordCount} ord
+                </span>
+              )}
+              <span className={`text-xs tabular-nums font-semibold ${(result?.wordCount ?? 0) >= 800 ? 'text-emerald-500' : (result?.wordCount ?? 0) >= 300 ? 'text-amber-500' : 'text-gray-400'}`}>
+                {result?.wordCount ?? form.bodyContent.split(/\s+/).filter(Boolean).length} ord
+              </span>
+            </div>
+          </div>
+          <textarea
+            rows={10}
+            value={form.bodyContent}
+            onChange={e => updateForm('bodyContent', e.target.value)}
+            className={`w-full px-4 py-3 rounded-xl border text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 transition resize-y ${
+              scraped.bodyContent && scraped.bodyContent !== form.bodyContent
+                ? 'border-indigo-200 bg-indigo-50/30'
+                : 'border-gray-200'
+            }`}
+            placeholder="Indsæt eller rediger sidens brødtekst..."
+          />
+        </div>
+
+        {/* Reset button */}
+        {(scraped.pageTitle || scraped.metaDescription || scraped.h1 || scraped.bodyContent) && (
+          <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+            <p className="text-xs text-gray-400">
+              {[
+                scraped.pageTitle !== form.pageTitle && 'title',
+                scraped.metaDescription !== form.metaDescription && 'meta',
+                scraped.h1 !== form.h1 && 'H1',
+                scraped.bodyContent !== form.bodyContent && 'indhold',
+              ].filter(Boolean).join(', ') || 'Ingen ændringer'}
+              {[scraped.pageTitle !== form.pageTitle, scraped.metaDescription !== form.metaDescription, scraped.h1 !== form.h1, scraped.bodyContent !== form.bodyContent].some(Boolean)
+                ? ' ændret'
+                : ''}
+            </p>
+            <button
+              onClick={() => {
+                updateForm('pageTitle', scraped.pageTitle)
+                updateForm('metaDescription', scraped.metaDescription)
+                updateForm('h1', scraped.h1)
+                updateForm('bodyContent', scraped.bodyContent)
+              }}
+              className="text-xs text-indigo-500 hover:text-indigo-700 font-semibold transition"
+            >
+              ↺ Nulstil til original
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function SeoDashboard() {
   const [form, setForm] = useState<FormState>(DEFAULT_FORM)
+  const [scraped, setScraped] = useState<ScrapedSnapshot>({ pageTitle: '', metaDescription: '', h1: '', bodyContent: '' })
   const [result, setResult] = useState<SeoResult | null>(null)
+  const [originalResult, setOriginalResult] = useState<SeoResult | null>(null)
   const [scraping, setScraping] = useState(false)
   const [scrapeError, setScrapeError] = useState('')
   const [openRec, setOpenRec] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'form' | 'dashboard'>('form')
   const [gscData, setGscData] = useState<GscData[]>([])
   const [gscFileName, setGscFileName] = useState('')
   const [competitorAnalysis, setCompetitorAnalysis] = useState<{url: string, result: SeoResult}[]>([])
@@ -166,34 +369,70 @@ export default function SeoDashboard() {
         setScrapeError(data.error ?? 'Scraping fejlede')
         return
       }
+      const newTitle = data.title || ''
+      const newMeta = data.description || ''
+      const newH1 = data.h1 || ''
+      const newBody = data.bodyContent || ''
+
+      // Save snapshot of scraped content
+      setScraped({ pageTitle: newTitle, metaDescription: newMeta, h1: newH1, bodyContent: newBody })
+
       setForm(prev => ({
         ...prev,
-        pageTitle: data.title || prev.pageTitle,
-        metaDescription: data.description || prev.metaDescription,
-        h1: data.h1 || prev.h1,
-        bodyContent: data.bodyContent || prev.bodyContent,
-        // semanticKeywords: Keep existing - user manages manually
+        pageTitle: newTitle || prev.pageTitle,
+        metaDescription: newMeta || prev.metaDescription,
+        h1: newH1 || prev.h1,
+        bodyContent: newBody || prev.bodyContent,
       }))
+
+      // Compute and lock in the "original" score from scraped content
+      if (form.targetKeyword) {
+        const origInput: SeoInput = {
+          url: form.url,
+          competitorUrls: [],
+          targetKeyword: form.targetKeyword.trim(),
+          semanticKeywords: form.semanticKeywords.split(',').map(s => s.trim()).filter(Boolean),
+          pageTitle: newTitle,
+          metaDescription: newMeta,
+          h1: newH1,
+          bodyContent: newBody,
+        }
+        setOriginalResult(analyzeSeo(origInput))
+      }
     } catch {
       setScrapeError('Netværksfejl – tjek din forbindelse')
     } finally {
       setScraping(false)
     }
-  }, [form.url])
+  }, [form.url, form.targetKeyword, form.semanticKeywords])
+
+  // Also set originalResult when keywords change after a scrape (if scraped data exists)
+  useEffect(() => {
+    if (!form.targetKeyword || !scraped.pageTitle) return
+    const origInput: SeoInput = {
+      url: form.url,
+      competitorUrls: [],
+      targetKeyword: form.targetKeyword.trim(),
+      semanticKeywords: form.semanticKeywords.split(',').map(s => s.trim()).filter(Boolean),
+      pageTitle: scraped.pageTitle,
+      metaDescription: scraped.metaDescription,
+      h1: scraped.h1,
+      bodyContent: scraped.bodyContent,
+    }
+    setOriginalResult(analyzeSeo(origInput))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.targetKeyword, form.semanticKeywords, scraped])
 
   // Handle GSC CSV upload
   const handleGscUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    
     setGscFileName(file.name)
     const reader = new FileReader()
     reader.onload = (evt) => {
       const text = evt.target?.result as string
       const lines = text.split('\n').filter(Boolean)
       const data: GscData[] = []
-      
-      // Parse CSV - skip header row
       for (let i = 1; i < lines.length; i++) {
         const parts = lines[i].split(',').map(s => s.trim().replace(/"/g, ''))
         if (parts.length >= 4) {
@@ -216,13 +455,10 @@ export default function SeoDashboard() {
       .split('\n')
       .map(u => u.trim())
       .filter(Boolean)
-      .slice(0, 2) // Max 2 competitors
-    
+      .slice(0, 2)
     if (competitorUrls.length === 0 || !form.targetKeyword) return
-    
     setAnalyzingCompetitor(true)
     try {
-      // Scrape all competitors in parallel
       const results = await Promise.all(
         competitorUrls.map(async (competitorUrl) => {
           try {
@@ -233,7 +469,6 @@ export default function SeoDashboard() {
             })
             const data = await res.json()
             if (!res.ok || data.error) return null
-            
             const competitorInput: SeoInput = {
               url: competitorUrl,
               competitorUrls: [],
@@ -251,7 +486,6 @@ export default function SeoDashboard() {
           }
         })
       )
-      
       setCompetitorAnalysis(results.filter(Boolean) as {url: string, result: SeoResult}[])
     } catch {
       // Silent fail
@@ -278,6 +512,11 @@ export default function SeoDashboard() {
                 <span className={`font-bold tabular-nums ${pct >= 70 ? 'text-emerald-600' : pct >= 45 ? 'text-amber-600' : 'text-red-500'}`}>
                   {pct}%
                 </span>
+                {originalResult && pct !== originalResult.percentage && (
+                  <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${pct > originalResult.percentage ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
+                    {pct > originalResult.percentage ? '▲' : '▼'} {Math.abs(pct - originalResult.percentage)}%
+                  </span>
+                )}
                 <span className="text-gray-400 text-xs">SEO Score</span>
               </div>
               <button
@@ -293,7 +532,7 @@ export default function SeoDashboard() {
 
       {/* ── SPLIT VIEW LAYOUT ── */}
       <div className="flex-1 flex overflow-hidden">
-        
+
         {/* LEFT SIDEBAR - Settings (40%) */}
         <div className={`${sidebarCollapsed ? 'w-0' : 'w-full lg:w-[40%]'} overflow-y-auto border-r border-gray-200 bg-white transition-all duration-300`}>
           <div className={`${sidebarCollapsed ? 'hidden' : 'block'} p-6 space-y-6`}>
@@ -331,17 +570,9 @@ export default function SeoDashboard() {
                 <button
                   onClick={() => {
                     if (confirm('Ryd alle felter og start forfra?')) {
-                      setForm({
-                        url: '',
-                        targetKeyword: '',
-                        semanticKeywords: '',
-                        customKeywords: '',
-                        pageTitle: '',
-                        metaDescription: '',
-                        h1: '',
-                        bodyContent: '',
-                        competitorUrls: '',
-                      })
+                      setForm(DEFAULT_FORM)
+                      setScraped({ pageTitle: '', metaDescription: '', h1: '', bodyContent: '' })
+                      setOriginalResult(null)
                       setGscData([])
                       setGscFileName('')
                       setCompetitorAnalysis([])
@@ -431,13 +662,7 @@ export default function SeoDashboard() {
                     Google Search Console data <span className="text-gray-300">(valgfri CSV)</span>
                   </label>
                   <div className="relative">
-                    <input
-                      type="file"
-                      accept=".csv"
-                      onChange={handleGscUpload}
-                      className="hidden"
-                      id="gsc-upload"
-                    />
+                    <input type="file" accept=".csv" onChange={handleGscUpload} className="hidden" id="gsc-upload" />
                     <label
                       htmlFor="gsc-upload"
                       className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl border-2 border-dashed border-gray-200 text-sm text-gray-500 hover:border-blue-300 hover:text-blue-600 transition cursor-pointer"
@@ -455,96 +680,60 @@ export default function SeoDashboard() {
               </div>
             </div>
 
-            {/* Meta */}
+            {/* Meta (read-only context – editing happens in Live Editor) */}
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
-              <h2 className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">
+              <h2 className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-1">
                 Meta Tags
               </h2>
-              <div className="space-y-4">
+              <p className="text-xs text-gray-400 mb-4">Rediger i <span className="font-semibold text-indigo-500">Live Editor</span> til højre for øjeblikkelig score-feedback</p>
+              <div className="space-y-3 pointer-events-none opacity-60">
                 <div>
                   <label className="text-xs font-semibold text-gray-500 flex items-center justify-between mb-1.5">
                     <span>Title Tag</span>
-                    <span className={`text-xs font-normal tabular-nums ${
-                      form.pageTitle.length > 65 ? 'text-red-400' :
-                      form.pageTitle.length >= 30 ? 'text-emerald-500' : 'text-gray-400'
-                    }`}>{form.pageTitle.length}/65</span>
+                    <span className="text-xs font-normal tabular-nums text-gray-400">{form.pageTitle.length}/65</span>
                   </label>
-                  <input
-                    type="text"
-                    placeholder="Nitrilhandsker – Pudderfri Engangshandsker | Hounisen"
-                    value={form.pageTitle}
-                    onChange={e => updateForm('pageTitle', e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition"
-                  />
+                  <div className="w-full px-4 py-2.5 rounded-xl border border-gray-100 bg-gray-50 text-sm text-gray-500 truncate min-h-[42px]">
+                    {form.pageTitle || <span className="italic text-gray-300">tom</span>}
+                  </div>
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-gray-500 flex items-center justify-between mb-1.5">
                     <span>Meta Description</span>
-                    <span className={`text-xs font-normal tabular-nums ${
-                      form.metaDescription.length > 160 ? 'text-red-400' :
-                      form.metaDescription.length >= 120 ? 'text-emerald-500' : 'text-gray-400'
-                    }`}>{form.metaDescription.length}/160</span>
+                    <span className="text-xs font-normal tabular-nums text-gray-400">{form.metaDescription.length}/160</span>
                   </label>
-                  <textarea
-                    rows={3}
-                    placeholder="Køb pudderfri nitrilhandsker til laboratoriet – CE-mærket, latexfri og allergivenlig..."
-                    value={form.metaDescription}
-                    onChange={e => updateForm('metaDescription', e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition resize-none"
-                  />
+                  <div className="w-full px-4 py-2.5 rounded-xl border border-gray-100 bg-gray-50 text-sm text-gray-500 line-clamp-2 min-h-[42px]">
+                    {form.metaDescription || <span className="italic text-gray-300">tom</span>}
+                  </div>
                 </div>
               </div>
             </div>
 
-            {/* Content */}
+            {/* Sideindhold (read-only context) */}
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 lg:col-span-2">
-              <h2 className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">
+              <h2 className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-1">
                 Sideindhold
               </h2>
-              <div className="space-y-4">
+              <p className="text-xs text-gray-400 mb-4">Rediger i <span className="font-semibold text-indigo-500">Live Editor</span> til højre</p>
+              <div className="space-y-3 pointer-events-none opacity-60">
                 <div>
                   <label className="text-xs font-semibold text-gray-500 block mb-1.5">H1 Overskrift</label>
-                  <input
-                    type="text"
-                    placeholder="Nitrilhandsker"
-                    value={form.h1}
-                    onChange={e => updateForm('h1', e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition"
-                  />
+                  <div className="w-full px-4 py-2.5 rounded-xl border border-gray-100 bg-gray-50 text-sm text-gray-500 truncate min-h-[42px]">
+                    {form.h1 || <span className="italic text-gray-300">tom</span>}
+                  </div>
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-gray-500 flex items-center justify-between mb-1.5">
                     <span>Brødtekst / Indhold</span>
-                    <span className={`text-xs font-normal tabular-nums ${
-                      (result?.wordCount ?? 0) >= 500 ? 'text-emerald-500' :
-                      (result?.wordCount ?? 0) >= 300 ? 'text-amber-500' : 'text-gray-400'
-                    }`}>
+                    <span className="text-xs font-normal tabular-nums text-gray-400">
                       {result?.wordCount ?? form.bodyContent.split(/\s+/).filter(Boolean).length} ord
                     </span>
                   </label>
-                  <textarea
-                    rows={8}
-                    placeholder="Indsæt eller rediger sidens brødtekst her. Den opdateres automatisk ved scraping."
-                    value={form.bodyContent}
-                    onChange={e => updateForm('bodyContent', e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition resize-y"
-                  />
+                  <div className="w-full px-4 py-2.5 rounded-xl border border-gray-100 bg-gray-50 text-sm text-gray-500 line-clamp-3 min-h-[60px]">
+                    {form.bodyContent || <span className="italic text-gray-300">tom</span>}
+                  </div>
                 </div>
               </div>
             </div>
-
-            {/* CTA */}
-            {result && (
-              <div className="lg:col-span-2 flex justify-center">
-                <button
-                  onClick={() => setActiveTab('dashboard')}
-                  className="px-8 py-3 rounded-xl text-white text-sm font-semibold transition-all active:scale-95 shadow-md"
-                  style={{ background: 'linear-gradient(135deg, #4f7fff, #7c5cff)' }}
-                >
-                  Se dashboard →
-                </button>
-              </div>
-            )}
           </div>
         </div>
 
@@ -566,7 +755,14 @@ export default function SeoDashboard() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between mb-3">
                         <div>
-                          <div className="text-3xl font-extrabold text-gray-900 tabular-nums">{pct}<span className="text-lg text-gray-400 font-semibold">%</span></div>
+                          <div className="flex items-baseline gap-2">
+                            <div className="text-3xl font-extrabold text-gray-900 tabular-nums">{pct}<span className="text-lg text-gray-400 font-semibold">%</span></div>
+                            {originalResult && pct !== originalResult.percentage && (
+                              <span className={`text-sm font-bold px-2 py-0.5 rounded-full ${pct > originalResult.percentage ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
+                                {pct > originalResult.percentage ? '▲' : '▼'} {Math.abs(pct - originalResult.percentage)}% ift. original
+                              </span>
+                            )}
+                          </div>
                           <div className={`text-sm font-semibold mt-0.5 ${pct >= 70 ? 'text-emerald-600' : pct >= 45 ? 'text-amber-600' : 'text-red-500'}`}>
                             {pct >= 70 ? 'God' : pct >= 45 ? 'Middel – kan forbedres' : 'Kritisk – kræver handling'}
                           </div>
@@ -597,14 +793,32 @@ export default function SeoDashboard() {
                   )}
                 </div>
 
+                {/* ── LIVE EDITOR ── */}
+                {scraped.pageTitle || scraped.metaDescription || scraped.h1 || scraped.bodyContent ? (
+                  <LiveEditor
+                    scraped={scraped}
+                    form={form}
+                    updateForm={updateForm}
+                    result={result}
+                    originalResult={originalResult}
+                  />
+                ) : (
+                  // Show editor even without scrape, just without diff markers
+                  <LiveEditor
+                    scraped={{ pageTitle: '', metaDescription: '', h1: '', bodyContent: '' }}
+                    form={form}
+                    updateForm={updateForm}
+                    result={result}
+                    originalResult={originalResult}
+                  />
+                )}
+
                 {/* Competitor comparison */}
                 {competitorAnalysis.length > 0 && (
                   <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-1">
                     <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">
                       Konkurrent-Sammenligning (Benchmarks)
                     </p>
-                    
-                    {/* Benchmark Table */}
                     <div className="overflow-x-auto -mx-2 mb-6">
                       <table className="w-full text-sm min-w-[600px]">
                         <thead>
@@ -627,9 +841,7 @@ export default function SeoDashboard() {
                               </span>
                             </td>
                             {competitorAnalysis.map((comp, i) => (
-                              <td key={i} className="py-3 px-3 text-center text-gray-700 font-semibold">
-                                {comp.result.wordCount}
-                              </td>
+                              <td key={i} className="py-3 px-3 text-center text-gray-700 font-semibold">{comp.result.wordCount}</td>
                             ))}
                           </tr>
                           <tr className="border-b border-gray-100">
@@ -647,9 +859,7 @@ export default function SeoDashboard() {
                             <td className="py-3 px-3 text-gray-600 font-medium">Readability</td>
                             <td className="py-3 px-3 text-center font-bold text-gray-800">{result?.readabilityScore || 'Medium'}</td>
                             {competitorAnalysis.map((comp, i) => (
-                              <td key={i} className="py-3 px-3 text-center text-gray-700 font-semibold">
-                                {comp.result.readabilityScore}
-                              </td>
+                              <td key={i} className="py-3 px-3 text-center text-gray-700 font-semibold">{comp.result.readabilityScore}</td>
                             ))}
                           </tr>
                           <tr className="border-b border-gray-100">
@@ -679,16 +889,12 @@ export default function SeoDashboard() {
                               </span>
                             </td>
                             {competitorAnalysis.map((comp, i) => (
-                              <td key={i} className="py-3 px-3 text-center text-gray-700 text-2xl font-bold">
-                                {comp.result.percentage}%
-                              </td>
+                              <td key={i} className="py-3 px-3 text-center text-gray-700 text-2xl font-bold">{comp.result.percentage}%</td>
                             ))}
                           </tr>
                         </tbody>
                       </table>
                     </div>
-                    
-                    {/* Insights */}
                     <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm">
                       <div className="font-semibold text-blue-900 mb-2">📊 Nøgleindsigter:</div>
                       <ul className="text-blue-800 space-y-1.5 ml-4 list-disc">
@@ -696,7 +902,6 @@ export default function SeoDashboard() {
                           const maxCompWordCount = Math.max(...competitorAnalysis.map(c => c.result.wordCount))
                           const maxCompKeywords = Math.max(...competitorAnalysis.map(c => c.result.keywordsFound))
                           const maxCompScore = Math.max(...competitorAnalysis.map(c => c.result.percentage))
-                          
                           return (
                             <>
                               {maxCompWordCount > (result?.wordCount || 0) && (
@@ -751,7 +956,7 @@ export default function SeoDashboard() {
 
                 {/* Keyword pills + table */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-2">
-                  <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">Brug disse keywords mere</p>
+                  <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">Keyword Status</p>
                   <div className="flex flex-wrap gap-2 mb-6">
                     {result.keywords.map(k => (
                       <span key={k.keyword}
@@ -795,8 +1000,7 @@ export default function SeoDashboard() {
                   </div>
                 </div>
 
-
-                {/* GSC Data comparison */}
+                {/* GSC Data */}
                 {gscData.length > 0 && (
                   <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-3">
                     <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">Google Search Console Data</p>
@@ -838,38 +1042,24 @@ export default function SeoDashboard() {
                   </div>
                 )}
 
-                {/* GSC Keyword Gap Analysis - Low-Hanging Fruit */}
+                {/* GSC Keyword Gap */}
                 {gscData.length > 0 && (
                   <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-3">
-                    <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-2">
-                      GSC Keyword Gap Analysis
-                    </p>
+                    <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-2">GSC Keyword Gap Analysis</p>
                     <p className="text-sm text-gray-600 mb-4">Quick wins baseret på dine faktiske Google data</p>
-                    
-                    {/* Low-hanging fruit - keywords not on page but getting impressions */}
                     {(() => {
                       const text = [form.pageTitle, form.metaDescription, form.h1, form.bodyContent].join(' ').toLowerCase()
                       const missingHighImpression = gscData
                         .filter(row => !text.includes(row.keyword.toLowerCase()) && row.impressions > 0)
-                        .sort((a, b) => b.impressions - a.impressions)
-                        .slice(0, 5)
-                      
+                        .sort((a, b) => b.impressions - a.impressions).slice(0, 5)
                       const lowPosition = gscData
                         .filter(row => row.position >= 4 && row.position <= 15 && row.impressions > 5)
-                        .sort((a, b) => b.impressions - a.impressions)
-                        .slice(0, 5)
-                      
+                        .sort((a, b) => b.impressions - a.impressions).slice(0, 5)
                       const highImpressionLowCtr = gscData
-                        .filter(row => {
-                          const ctr = row.impressions > 0 ? (row.clicks / row.impressions) * 100 : 0
-                          return row.impressions >= 50 && ctr < 5
-                        })
-                        .sort((a, b) => b.impressions - a.impressions)
-                        .slice(0, 5)
-                      
+                        .filter(row => { const ctr = row.impressions > 0 ? (row.clicks / row.impressions) * 100 : 0; return row.impressions >= 50 && ctr < 5 })
+                        .sort((a, b) => b.impressions - a.impressions).slice(0, 5)
                       return (
                         <div className="space-y-4">
-                          {/* Missing keywords with impressions */}
                           {missingHighImpression.length > 0 && (
                             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
                               <div className="flex items-center gap-2 mb-3">
@@ -884,9 +1074,7 @@ export default function SeoDashboard() {
                                   <div key={i} className="flex items-center justify-between p-2 bg-white rounded-lg border border-amber-100">
                                     <div className="flex-1">
                                       <span className="font-semibold text-gray-800 text-sm">{row.keyword}</span>
-                                      <div className="text-xs text-gray-500 mt-0.5">
-                                        {row.impressions.toLocaleString()} impressions · {row.clicks.toLocaleString()} clicks · Pos {row.position.toFixed(1)}
-                                      </div>
+                                      <div className="text-xs text-gray-500 mt-0.5">{row.impressions.toLocaleString()} impressions · {row.clicks.toLocaleString()} clicks · Pos {row.position.toFixed(1)}</div>
                                     </div>
                                     <span className="px-2 py-1 bg-amber-100 text-amber-800 text-xs font-semibold rounded">Tilføj til tekst</span>
                                   </div>
@@ -894,8 +1082,6 @@ export default function SeoDashboard() {
                               </div>
                             </div>
                           )}
-                          
-                          {/* Position 4-15 opportunities */}
                           {lowPosition.length > 0 && (
                             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
                               <div className="flex items-center gap-2 mb-3">
@@ -912,9 +1098,7 @@ export default function SeoDashboard() {
                                     <div key={i} className="flex items-center justify-between p-2 bg-white rounded-lg border border-blue-100">
                                       <div className="flex-1">
                                         <span className="font-semibold text-gray-800 text-sm">{row.keyword}</span>
-                                        <div className="text-xs text-gray-500 mt-0.5">
-                                          Position #{row.position.toFixed(1)} · {row.impressions.toLocaleString()} impressions
-                                        </div>
+                                        <div className="text-xs text-gray-500 mt-0.5">Position #{row.position.toFixed(1)} · {row.impressions.toLocaleString()} impressions</div>
                                       </div>
                                       <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs font-semibold rounded">+{estimatedBoost} clicks</span>
                                     </div>
@@ -923,8 +1107,6 @@ export default function SeoDashboard() {
                               </div>
                             </div>
                           )}
-                          
-                          {/* High impressions, low CTR */}
                           {highImpressionLowCtr.length > 0 && (
                             <div className="bg-purple-50 border border-purple-200 rounded-xl p-4">
                               <div className="flex items-center gap-2 mb-3">
@@ -941,9 +1123,7 @@ export default function SeoDashboard() {
                                     <div key={i} className="flex items-center justify-between p-2 bg-white rounded-lg border border-purple-100">
                                       <div className="flex-1">
                                         <span className="font-semibold text-gray-800 text-sm">{row.keyword}</span>
-                                        <div className="text-xs text-gray-500 mt-0.5">
-                                          {row.impressions.toLocaleString()} impressions · CTR {ctr}%
-                                        </div>
+                                        <div className="text-xs text-gray-500 mt-0.5">{row.impressions.toLocaleString()} impressions · CTR {ctr}%</div>
                                       </div>
                                       <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs font-semibold rounded">Lav CTR</span>
                                     </div>
@@ -952,11 +1132,8 @@ export default function SeoDashboard() {
                               </div>
                             </div>
                           )}
-                          
                           {missingHighImpression.length === 0 && lowPosition.length === 0 && highImpressionLowCtr.length === 0 && (
-                            <div className="text-center py-8 text-gray-400 text-sm">
-                              Ingen umiddelbare quick wins fundet i GSC-data. Din side performer stærkt! 🎉
-                            </div>
+                            <div className="text-center py-8 text-gray-400 text-sm">Ingen umiddelbare quick wins fundet i GSC-data. Din side performer stærkt! 🎉</div>
                           )}
                         </div>
                       )
@@ -1004,10 +1181,8 @@ export default function SeoDashboard() {
                   const optimizeKeywords = result.keywords.filter(k => k.status === 'Optimer')
                   const missingKeywords = result.keywords.filter(k => k.status === 'Mangler')
                   const customKeywordsArray = form.customKeywords.split(',').map(k => k.trim()).filter(Boolean)
-                  
                   return (
                     <>
-                      {/* USE THESE KEYWORDS MORE */}
                       {optimizeKeywords.length > 0 && (
                         <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-5">
                           <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">Use These Keywords More</p>
@@ -1021,8 +1196,6 @@ export default function SeoDashboard() {
                           </div>
                         </div>
                       )}
-
-                      {/* CONSIDER SEMANTIC RICH KEYWORDS */}
                       {missingKeywords.length > 0 && (
                         <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-6">
                           <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">Consider Semantic Rich Keywords</p>
@@ -1035,8 +1208,6 @@ export default function SeoDashboard() {
                           </div>
                         </div>
                       )}
-
-                      {/* CUSTOM KEYWORDS */}
                       {customKeywordsArray.length > 0 && (
                         <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-7">
                           <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">Custom Keywords</p>
@@ -1047,12 +1218,9 @@ export default function SeoDashboard() {
                               const matches = text.match(new RegExp(normalizedKeyword, 'g'))
                               const count = matches ? matches.length : 0
                               const found = count > 0
-                              
                               return (
                                 <span key={i} className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold ${
-                                  found 
-                                    ? 'bg-emerald-50 text-emerald-700' 
-                                    : 'bg-red-50 text-red-600 border border-red-200'
+                                  found ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600 border border-red-200'
                                 }`}>
                                   {kw}
                                   {found && <span className="text-emerald-500">✓</span>}
