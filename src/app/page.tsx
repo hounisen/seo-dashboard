@@ -865,16 +865,39 @@ export default function SeoDashboard() {
                             ))}
                           </tr>
                           <tr className="border-b border-gray-100">
-                            <td className="py-3 px-3 text-gray-600 font-medium">Keywords Dækket</td>
+                            <td className="py-3 px-3 text-gray-600 font-medium">
+                              Main keyword
+                              <div className="text-xs text-gray-400 font-normal">antal gange nævnt</div>
+                            </td>
                             <td className="py-3 px-3 text-center">
-                              <span className="font-bold text-emerald-600">{result?.keywordsFound || 0}/{(result?.keywordsFound || 0) + (result?.keywordsMissing || 0)}</span>
+                              <span className={`font-bold tabular-nums ${(result?.targetKeywordCount || 0) >= 5 ? 'text-emerald-600' : (result?.targetKeywordCount || 0) >= 2 ? 'text-amber-600' : 'text-red-500'}`}>
+                                {result?.targetKeywordCount || 0}×
+                              </span>
                             </td>
                             {competitorAnalysis.map((comp, i) => (
-                              <td key={i} className="py-3 px-3 text-center text-gray-700 font-semibold">
-                                {comp.result.keywordsFound}/{comp.result.keywordsFound + comp.result.keywordsMissing}
+                              <td key={i} className="py-3 px-3 text-center text-gray-700 font-semibold tabular-nums">
+                                {comp.result.targetKeywordCount}×
                               </td>
                             ))}
                           </tr>
+                          {(result?.semanticKeywordsTotal || 0) > 0 && (
+                            <tr className="border-b border-gray-100">
+                              <td className="py-3 px-3 text-gray-600 font-medium">
+                                Semantiske keywords
+                                <div className="text-xs text-gray-400 font-normal">dækket af total</div>
+                              </td>
+                              <td className="py-3 px-3 text-center">
+                                <span className={`font-bold tabular-nums ${(result?.semanticKeywordsCovered || 0) === (result?.semanticKeywordsTotal || 1) ? 'text-emerald-600' : (result?.semanticKeywordsCovered || 0) > 0 ? 'text-amber-600' : 'text-red-500'}`}>
+                                  {result?.semanticKeywordsCovered || 0}/{result?.semanticKeywordsTotal || 0}
+                                </span>
+                              </td>
+                              {competitorAnalysis.map((comp, i) => (
+                                <td key={i} className="py-3 px-3 text-center text-gray-700 font-semibold tabular-nums">
+                                  {comp.result.semanticKeywordsCovered}/{comp.result.semanticKeywordsTotal}
+                                </td>
+                              ))}
+                            </tr>
+                          )}
                           <tr className="border-b border-gray-100">
                             <td className="py-3 px-3 text-gray-600 font-medium">Readability</td>
                             <td className="py-3 px-3 text-center font-bold text-gray-800">{result?.readabilityScore || 'Medium'}</td>

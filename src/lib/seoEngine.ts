@@ -58,6 +58,9 @@ export interface SeoResult {
   keywordsMissing: number
   keywordsOptimise: number
   readabilityScore: 'Høj' | 'Medium' | 'Lav'
+  targetKeywordCount: number
+  semanticKeywordsCovered: number
+  semanticKeywordsTotal: number
 }
 
 // Count keyword occurrences in text (case-insensitive, flexible spacing)
@@ -405,5 +408,8 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     keywordsMissing,
     keywordsOptimise,
     readabilityScore,
+    targetKeywordCount: targetCount,
+    semanticKeywordsCovered: semanticCovered,
+    semanticKeywordsTotal: input.semanticKeywords.length,
   }
 }
