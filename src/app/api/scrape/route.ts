@@ -10,19 +10,35 @@ export async function POST(req: NextRequest) {
   try {
     const response = await fetch('https://api.firecrawl.dev/v1/scrape', {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, formats: ['markdown', 'extract'], extract: { schema: { title: 'string', description: 'string', h1: 'string' } } }),
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        url,
+        formats: ['markdown'],
+        onlyMainContent: true,
+      }),
     })
+
     const data = await response.json()
-    if (!response.ok) return NextResponse.json({ error: data.error ?? 'Firecrawl fejl' }, { status: 500 })
+
+    if (!response.ok) {
+      return NextResponse.json({ error: data.error ?? 'Firecrawl fejl' }, { status: 500 })
+    }
+
+    // Extract H1 from markdown (first # heading)
+    const markdown = data.data?.markdown ?? data.markdown ?? ''
+    const h1Match = markdown.match(/^#\s+(.+)$/m)
+    const h1 = h1Match ? h1Match[1].trim() : ''
 
     return NextResponse.json({
-      title: data.metadata?.title ?? data.extract?.title ?? '',
-      description: data.metadata?.description ?? data.extract?.description ?? '',
-      h1: data.extract?.h1 ?? '',
-      bodyContent: data.markdown ?? '',
+      title: data.data?.metadata?.title ?? data.metadata?.title ?? '',
+      description: data.data?.metadata?.description ?? data.metadata?.description ?? '',
+      h1,
+      bodyContent: markdown,
     })
-  } catch (e) {
-    return NextResponse.json({ error: 'Netværksfejl' }, { status: 500 })
+  } catch {
+    return NextResponse.json({ error: 'Netværksfejl – tjek din forbindelse' }, { status: 500 })
   }
 }
