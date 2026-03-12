@@ -370,7 +370,17 @@ export default function SeoDashboard() {
         return
       }
       const newTitle = data.title || ''
-      const newMeta = data.description || ''
+
+      // Trim meta description to first sentence/clause near 160 chars to avoid Firecrawl noise
+      const rawMeta = data.description || ''
+      let newMeta = rawMeta
+      if (rawMeta.length > 160) {
+        // Find last sentence end (., !, ?) before 160 chars
+        const cutoff = rawMeta.substring(0, 165)
+        const lastDot = Math.max(cutoff.lastIndexOf('. '), cutoff.lastIndexOf('! '), cutoff.lastIndexOf('? '))
+        newMeta = lastDot > 60 ? rawMeta.substring(0, lastDot + 1).trim() : rawMeta.substring(0, 160).trim()
+      }
+
       const newH1 = data.h1 || ''
       const newBody = data.bodyContent || ''
 
@@ -742,8 +752,18 @@ export default function SeoDashboard() {
           <div className="max-w-5xl mx-auto space-y-5">
             {!result ? (
               <div className="bg-white rounded-2xl p-12 text-center shadow-sm border border-gray-100">
-                <p className="text-gray-400 text-sm">Udfyld target keyword og scrape URL for at se analysen.</p>
-                <p className="text-gray-500 text-xs mt-2">Resultaterne vises live her mens du ændrer indstillinger ←</p>
+                {(scraped.pageTitle || scraped.bodyContent) && !form.targetKeyword ? (
+                  <>
+                    <div className="text-3xl mb-3">✅</div>
+                    <p className="text-gray-700 text-sm font-semibold mb-1">Side scraped – mangler kun target keyword</p>
+                    <p className="text-gray-400 text-xs">Udfyld <span className="font-semibold text-blue-500">Target keyword</span> i venstre side for at se analysen</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-gray-400 text-sm">Udfyld target keyword og scrape URL for at se analysen.</p>
+                    <p className="text-gray-500 text-xs mt-2">Resultaterne vises live her mens du ændrer indstillinger ←</p>
+                  </>
+                )}
               </div>
             ) : (
               <>

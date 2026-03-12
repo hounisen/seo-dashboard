@@ -238,13 +238,15 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     {
       id: 'meta',
       label: 'Meta Description',
-      status: metaHasKeyword && metaGoodLength ? 'ok' : metaHasKeyword ? 'warn' : 'error',
-      statusLabel: metaHasKeyword && metaGoodLength ? 'Optimised' : '1 fejl',
+      status: metaHasKeyword && metaGoodLength ? 'ok' : 'warn',
+      statusLabel: metaHasKeyword && metaGoodLength ? 'Optimised' : '1 advarsel',
       detail: metaHasKeyword
         ? metaGoodLength
           ? `Meta description er optimeret (${input.metaDescription.length} tegn).`
           : `Meta description indeholder keyword, men er ${input.metaDescription.length} tegn. Optimal: 120–160 tegn.`
-        : `Meta description mangler target keyword og/eller er for ${input.metaDescription.length < 120 ? 'kort' : 'lang'} (${input.metaDescription.length} tegn). Optimal: 120–160 tegn.`,
+        : metaGoodLength
+          ? `Meta description er god længde (${input.metaDescription.length} tegn), men mangler target keyword "${input.targetKeyword}". Tilføj det naturligt i beskrivelsen.`
+          : `Meta description mangler target keyword og er ${input.metaDescription.length < 120 ? 'for kort' : 'for lang'} (${input.metaDescription.length} tegn). Optimal: 120–160 tegn med target keyword.`,
     },
     {
       id: 'faq',
