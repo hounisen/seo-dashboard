@@ -90,7 +90,7 @@ export async function POST(req: NextRequest) {
         url,
         formats: ['markdown'],
         onlyMainContent: true,
-        skipCache: true,
+        maxAge: 0,
       }),
     })
 
