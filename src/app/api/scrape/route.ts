@@ -1,69 +1,95 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 // ── Markdown cleaner ─────────────────────────────────────────────────────────
-// Removes social media embeds, navigation cruft, image noise and other
+// Removes social media embeds, e-commerce UI, navigation cruft and other
 // non-content blocks that Firecrawl picks up from widgets and sidebars.
 function cleanMarkdown(md: string): string {
   const lines = md.split('\n')
   const cleaned: string[] = []
   let skipBlock = false
+  let skipUntilNextHeading = false
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
-    const trimmed = line.trim()
+    const t = line.trim()
 
     // ── Skip entire Instagram / social embed blocks ──────────────────────────
-    // Starts when we see an Instagram username line or "View Instagram post"
-    if (/^\[hoteloasia\]|^\[View Instagram|instagram\.com\/p\/|instagram\.com\/reel\//.test(trimmed)) {
+    if (/^\[hoteloasia\]|^\[View Instagram|instagram\.com\/p\/|instagram\.com\/reel\//.test(t)) {
       skipBlock = true
     }
-    // End skip block at next real heading or after a blank line following junk
     if (skipBlock) {
-      if (/^#{1,3}\s/.test(trimmed) && !/instagram|hoteloasia/i.test(trimmed)) {
-        skipBlock = false
-      } else {
-        continue
-      }
+      if (/^#{1,3}\s/.test(t) && !/instagram|hoteloasia/i.test(t)) skipBlock = false
+      else continue
     }
 
-    // ── Drop individual noisy line patterns ──────────────────────────────────
+    // ── Skip newsletter/signup sections (trigger phrase → next heading) ───────
+    if (/bliv en del af|tilmeld.*nyhedsbrev|få nyheder.*eksklusive|sign up for our|subscribe to our/i.test(t)) {
+      skipUntilNextHeading = true
+    }
+    if (skipUntilNextHeading) {
+      if (/^#{1,3}\s/.test(t)) skipUntilNextHeading = false
+      else continue
+    }
 
-    // Navigation links: [ForrigeForrige...], [NæsteNæste...], [Scroll to top...]
-    if (/^\[(Forrige|Næste|Scroll to top|Previous Slide|Next Slide)/i.test(trimmed)) continue
+    // ── Breadcrumb navigation ────────────────────────────────────────────────
+    // "- [Label](url)" – single link list item = breadcrumb
+    if (/^-\s+\[.+?\]\(https?:\/\/.+?\)$/.test(t)) continue
+    // "- Plain text" that is clearly a breadcrumb tail (short, no sentence)
+    if (/^-\s+[^[].{1,60}$/.test(t) && !/[.,:;!?]/.test(t) && i < 10) continue
 
-    // Image-only markdown lines: [![alt text](url)](url) or ![alt](url)
-    if (/^!\[/.test(trimmed)) continue
+    // ── Image lines ──────────────────────────────────────────────────────────
+    if (t.startsWith('![') || t.startsWith('[![')) continue
+    // GetImage CDN / product image URLs
+    if (/GetImage\.ashx|\/Files\/Images\/Ecom\//.test(t)) continue
 
-    // Pure markdown link lines that are just UI elements (share, social, nav)
-    if (/^\[(Facebook|Twitter|Linkedin|Pinterest|Email|Instagram|Share|Open post|Scroll)/.test(trimmed)) continue
+    // ── Product card / e-commerce UI ────────────────────────────────────────
+    if (/^\*\*(Varenummer|Varenavn|Måleområde|Lagerstatus|Bestillingsnummer|Art\.?nr):\*\*/i.test(t)) continue
+    if (/^(På lager|Ikke på lager|Udgået|Kan bestilles|In stock|Out of stock)$/i.test(t)) continue
+    if (/^(Vis alle|Vis kun|Sortering|Alfabetisk|Varenummer|Popularitet|Brand[A-Z])/i.test(t)) continue
+    if (/\d+\s+produkter?\s+i\s+kategorien/i.test(t)) continue
+    // CTA buttons
+    if (/^\[(Se produkt|Tilføj til kurv|Køb nu|Log ind|Bliv kunde|Opret|Add to cart)\]/i.test(t)) continue
+    if (/for at se priser og købe/i.test(t)) continue
+    // "Log ind" or "Bliv kunde" embedded in line
+    if (/^\[Log ind\].*\[Bliv kunde\]/i.test(t)) continue
 
-    // Lines that are just a URL or empty anchor
-    if (/^https?:\/\/\S+$/.test(trimmed)) continue
+    // ── Contact / USP lines ──────────────────────────────────────────────────
+    if (/^Tlf\.?\s*[\d\s()+-]{6,}$/.test(t)) continue
+    if (/^\[.*@.*\]\(mailto:/.test(t)) continue
+    // ✓ checkmark USP lines (short, no sentence-ending punctuation)
+    if (/^[✓✔●•▸]\s/.test(t) && t.length < 80 && !/[.,:;]$/.test(t)) continue
+    // Standalone USP words repeated outside content area
+    if (/^(Dansk support|Dag-til-dag levering|Hurtig genbestilling|Faguddannet personale|Fragtfri|Gratis fragt)(\s*\(.*\))?$/i.test(t)) continue
 
-    // "Add ID to the Hide Specific Photos" and similar CMS admin notes
-    if (/Hide photo|Add ID to|Hide Specific Photos/.test(trimmed)) continue
+    // ── Navigation / pagination ──────────────────────────────────────────────
+    if (/^\[(Forrige|Næste|Scroll to top|Previous Slide|Next Slide)/i.test(t)) continue
 
-    // Single-cell table rows used as spacers/nav: |     | or | #### [text] |
-    if (/^\|[\s]*\|$/.test(trimmed)) continue
-    if (/^\|[\s]*####\s*\[/.test(trimmed)) continue
-    if (/^\|[\s]*---[\s]*\|$/.test(trimmed)) continue
+    // ── Social sharing ───────────────────────────────────────────────────────
+    if (/^\[(Facebook|Twitter|Linkedin|Pinterest|Email|Instagram|Share|Open post|Scroll)/.test(t)) continue
 
-    // Lines that are only punctuation / markdown table separators
-    if (/^[-|\s]+$/.test(trimmed) && trimmed.length > 0) continue
+    // ── Bare URLs ────────────────────────────────────────────────────────────
+    if (/^https?:\/\/\S+$/.test(t)) continue
 
-    // Drop lines with only an Instagram handle @mention
-    if (/^@[a-zA-Z0-9_]+$/.test(trimmed)) continue
+    // ── CMS / admin noise ────────────────────────────────────────────────────
+    if (/Hide photo|Add ID to|Hide Specific Photos/.test(t)) continue
 
-    // Drop "Mar DD" date stamps (Instagram post dates)
-    if (/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}$/.test(trimmed)) continue
+    // ── Table spacers ────────────────────────────────────────────────────────
+    if (/^\|[\s]*\|$/.test(t)) continue
+    if (/^\|[\s]*####\s*\[/.test(t)) continue
+    if (/^\|[\s]*---[\s]*\|$/.test(t)) continue
+    if (/^[-|\s]+$/.test(t) && t.length > 0) continue
 
-    // Drop scontent CDN image URLs embedded in text
-    if (/scontent-cph|cdninstagram\.com/.test(trimmed)) continue
+    // ── Instagram metadata ───────────────────────────────────────────────────
+    if (/^@[a-zA-Z0-9_]+$/.test(t)) continue
+    if (/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}$/.test(t)) continue
+    if (/scontent-cph|cdninstagram\.com/.test(t)) continue
+
+    // ── GDPR boilerplate (short lines only) ──────────────────────────────────
+    if (/persondatapolitik|handelsbetingelser|privatlivspolitik|cookiepolitik/i.test(t) && t.length < 150) continue
 
     cleaned.push(line)
   }
 
-  // Collapse 3+ consecutive blank lines into 2
   return cleaned
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
@@ -105,7 +131,7 @@ export async function POST(req: NextRequest) {
     const h1Match = rawMarkdown.match(/^#\s+(.+)$/m)
     const h1 = h1Match ? h1Match[1].trim() : ''
 
-    // Clean markdown – strip social widgets, nav noise, image alt-text blocks
+    // Clean markdown – strip social widgets, e-commerce UI, nav noise
     const bodyContent = cleanMarkdown(rawMarkdown)
 
     return NextResponse.json({

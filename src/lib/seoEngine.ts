@@ -58,49 +58,18 @@ export interface SeoResult {
   keywordsMissing: number
   keywordsOptimise: number
   readabilityScore: 'Høj' | 'Medium' | 'Lav'
-  targetKeywordCount: number
-  semanticKeywordsCovered: number
-  semanticKeywordsTotal: number
 }
 
-// Danish + common stopwords that can appear between keyword words
-const STOPWORDS = [
-  'i', 'og', 'på', 'af', 'en', 'et', 'de', 'det', 'den', 'til', 'med',
-  'fra', 'for', 'er', 'om', 'ved', 'som', 'der', 'når', 'at', 'men',
-  'the', 'a', 'an', 'in', 'of', 'and', 'or', 'to', 'for', 'with',
-]
-const STOPWORDS_PATTERN = `(?:\\s+(?:${STOPWORDS.join('|')}))?`
-
-// Build a flexible regex that allows optional stopwords between each word pair
-// e.g. "gode restauranter århus" also matches "gode restauranter i århus"
-function buildFlexiblePattern(keyword: string): RegExp {
-  const words = keyword.toLowerCase().trim().split(/\s+/).filter(Boolean)
-  if (words.length === 1) {
-    // Single word: simple word-boundary match
-    return new RegExp(`(?<![\\wæøåÆØÅ])${escapeRegex(words[0])}(?![\\wæøåÆØÅ])`, 'gi')
-  }
-  // Multi-word: allow optional stopword(s) between each pair of words
-  const pattern = words.map(w => escapeRegex(w)).join(`${STOPWORDS_PATTERN}\\s+`)
-  return new RegExp(pattern, 'gi')
-}
-
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-// Count keyword occurrences in text (case-insensitive, stopword-tolerant)
+// Count keyword occurrences in text (case-insensitive, flexible spacing)
 function countOccurrences(text: string, keyword: string): number {
   if (!text || !keyword) return 0
-  try {
-    const regex = buildFlexiblePattern(keyword)
-    const matches = text.toLowerCase().match(regex)
-    return matches ? matches.length : 0
-  } catch {
-    // Fallback to simple match if regex fails
-    const simple = keyword.toLowerCase().trim().replace(/\s+/g, '\\s+')
-    const matches = text.toLowerCase().match(new RegExp(simple, 'gi'))
-    return matches ? matches.length : 0
-  }
+  
+  // Normalize spaces in keyword and text for flexible matching
+  const normalizedKeyword = keyword.toLowerCase().trim().replace(/\s+/g, '\\s*')
+  const normalizedText = text.toLowerCase()
+  
+  const matches = normalizedText.match(new RegExp(normalizedKeyword, 'g'))
+  return matches ? matches.length : 0
 }
 
 // Merge all text for scanning
@@ -269,15 +238,13 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     {
       id: 'meta',
       label: 'Meta Description',
-      status: metaHasKeyword && metaGoodLength ? 'ok' : 'warn',
-      statusLabel: metaHasKeyword && metaGoodLength ? 'Optimised' : '1 advarsel',
+      status: metaHasKeyword && metaGoodLength ? 'ok' : metaHasKeyword ? 'warn' : 'error',
+      statusLabel: metaHasKeyword && metaGoodLength ? 'Optimised' : '1 fejl',
       detail: metaHasKeyword
         ? metaGoodLength
           ? `Meta description er optimeret (${input.metaDescription.length} tegn).`
           : `Meta description indeholder keyword, men er ${input.metaDescription.length} tegn. Optimal: 120–160 tegn.`
-        : metaGoodLength
-          ? `Meta description er god længde (${input.metaDescription.length} tegn), men mangler target keyword "${input.targetKeyword}". Tilføj det naturligt i beskrivelsen.`
-          : `Meta description mangler target keyword og er ${input.metaDescription.length < 120 ? 'for kort' : 'for lang'} (${input.metaDescription.length} tegn). Optimal: 120–160 tegn med target keyword.`,
+        : `Meta description mangler target keyword og/eller er for ${input.metaDescription.length < 120 ? 'kort' : 'lang'} (${input.metaDescription.length} tegn). Optimal: 120–160 tegn.`,
     },
     {
       id: 'faq',
@@ -436,8 +403,5 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     keywordsMissing,
     keywordsOptimise,
     readabilityScore,
-    targetKeywordCount: targetCount,
-    semanticKeywordsCovered: semanticCovered,
-    semanticKeywordsTotal: input.semanticKeywords.length,
   }
 }
