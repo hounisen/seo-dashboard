@@ -14,6 +14,7 @@ interface FormState {
   metaDescription: string
   h1: string
   bodyContent: string
+  structuredDataTypes: string[]
 }
 
 interface GscData {
@@ -22,6 +23,17 @@ interface GscData {
   clicks: number
   position: number
 }
+
+const SCHEMA_TYPES = [
+  { id: 'Product',       label: 'Product',        icon: '🛒' },
+  { id: 'FAQPage',       label: 'FAQ Page',        icon: '❓' },
+  { id: 'Organization',  label: 'Organization',    icon: '🏢' },
+  { id: 'HotelRoom',     label: 'Hotel Room',      icon: '🛏️' },
+  { id: 'LocalBusiness', label: 'Local Business',  icon: '📍' },
+  { id: 'Article',       label: 'Article',         icon: '📄' },
+  { id: 'BreadcrumbList',label: 'Breadcrumb',      icon: '🔗' },
+  { id: 'ItemList',      label: 'Item List',       icon: '📋' },
+]
 
 const DEFAULT_FORM: FormState = {
   url: '',
@@ -33,6 +45,7 @@ const DEFAULT_FORM: FormState = {
   metaDescription: '',
   h1: '',
   bodyContent: '',
+  structuredDataTypes: [],
 }
 
 // ── Helper components ─────────────────────────────────────────────────────────
@@ -142,6 +155,7 @@ export default function SeoDashboard() {
       metaDescription: form.metaDescription,
       h1: form.h1,
       bodyContent: form.bodyContent,
+      structuredDataTypes: form.structuredDataTypes,
     }
     setResult(analyzeSeo(input))
   }, [form])
@@ -341,6 +355,7 @@ export default function SeoDashboard() {
                         h1: '',
                         bodyContent: '',
                         competitorUrls: '',
+                        structuredDataTypes: [],
                       })
                       setGscData([])
                       setGscFileName('')
@@ -426,6 +441,52 @@ export default function SeoDashboard() {
                   />
                   <p className="text-xs text-gray-400 mt-1.5">Varianter af dit primære keyword der scores separat</p>
                 </div>
+                {/* Structured Data Checkboxes */}
+                <div>
+                  <label className="text-xs font-semibold text-gray-500 block mb-2">
+                    Structured Data / JSON-LD <span className="text-gray-300">(markér hvad siden har)</span>
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {SCHEMA_TYPES.map(schema => {
+                      const isChecked = form.structuredDataTypes.includes(schema.id)
+                      return (
+                        <button
+                          key={schema.id}
+                          type="button"
+                          onClick={() => {
+                            const next = isChecked
+                              ? form.structuredDataTypes.filter(t => t !== schema.id)
+                              : [...form.structuredDataTypes, schema.id]
+                            setForm(prev => ({ ...prev, structuredDataTypes: next }))
+                          }}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-medium transition-all text-left ${
+                            isChecked
+                              ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                              : 'border-gray-200 bg-gray-50 text-gray-500 hover:border-gray-300 hover:bg-gray-100'
+                          }`}
+                        >
+                          <span className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center ${
+                            isChecked ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300 bg-white'
+                          }`}>
+                            {isChecked && <span className="text-white text-xs leading-none">✓</span>}
+                          </span>
+                          <span>{schema.icon} {schema.label}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {form.structuredDataTypes.length > 0 && (
+                    <p className="text-xs text-emerald-600 mt-2 font-medium">
+                      ✓ {form.structuredDataTypes.join(', ')} – tæller med i scoren
+                    </p>
+                  )}
+                  <p className="text-xs text-gray-400 mt-1.5">
+                    Tjek via{' '}
+                    <a href="https://search.google.com/test/rich-results" target="_blank" rel="noopener noreferrer"
+                      className="text-blue-400 hover:underline">Google Rich Results Test</a>
+                  </p>
+                </div>
+
                 <div>
                   <label className="text-xs font-semibold text-gray-500 block mb-1.5">
                     Google Search Console data <span className="text-gray-300">(valgfri CSV)</span>
