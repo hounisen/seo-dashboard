@@ -1,5 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server'
 
+// ── Meta description cleaner ────────────────────────────────────────────────
+// Removes injected third-party content (e.g. Opally, ad scripts) that some
+// platforms append to the meta description after a comma or semicolon.
+function cleanMetaDescription(raw: string): string {
+  if (!raw) return ''
+
+  // Pattern 1: ", SomeThirdParty..." – comma followed by capital letter after min 60 chars
+  // Catches: "Real meta., Opally's AI skriver..." or "Real meta, ThirdParty..."
+  const commaInject = raw.match(/^(.{60,}?[.!?])\s*,\s*[A-ZÆØÅ]/)
+  if (commaInject) return commaInject[1].trim()
+
+  // Pattern 2: semicolon injection after min 60 chars
+  const semiInject = raw.match(/^(.{60,}?[.!?])\s*;\s*[A-ZÆØÅ]/)
+  if (semiInject) return semiInject[1].trim()
+
+  // Pattern 3: over 160 chars – cut at last sentence boundary before 160
+  if (raw.length > 160) {
+    const cutzone = raw.substring(0, 165)
+    const lastEnd = Math.max(
+      cutzone.lastIndexOf('. '),
+      cutzone.lastIndexOf('! '),
+      cutzone.lastIndexOf('? '),
+      cutzone.lastIndexOf('.')
+    )
+    if (lastEnd > 60) return raw.substring(0, lastEnd + 1).trim()
+    return raw.substring(0, 160).trim()
+  }
+
+  return raw.trim()
+}
+
 // ── Markdown cleaner ─────────────────────────────────────────────────────────
 // Removes social media embeds, e-commerce UI, navigation cruft and other
 // non-content blocks that Firecrawl picks up from widgets and sidebars.
@@ -134,9 +165,12 @@ export async function POST(req: NextRequest) {
     // Clean markdown – strip social widgets, e-commerce UI, nav noise
     const bodyContent = cleanMarkdown(rawMarkdown)
 
+    const rawDescription = data.data?.metadata?.description ?? data.metadata?.description ?? ''
+    const description = cleanMetaDescription(rawDescription)
+
     return NextResponse.json({
       title: data.data?.metadata?.title ?? data.metadata?.title ?? '',
-      description: data.data?.metadata?.description ?? data.metadata?.description ?? '',
+      description,
       h1,
       bodyContent,
     })
