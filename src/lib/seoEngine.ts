@@ -162,7 +162,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   
   if (internalLinks >= 1) score += 5
 
-  // 9. Structured data (5 pts) – user-confirmed via checkboxes
+  // Structured data (5 pts) – user-confirmed via checkboxes
   if (input.structuredDataTypes && input.structuredDataTypes.length > 0) score += 5
 
   const percentage = Math.min(Math.round(score), 100)
@@ -244,7 +244,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     {
       id: 'meta',
       label: 'Meta Description',
-      status: metaHasKeyword && metaGoodLength ? 'ok' : metaHasKeyword ? 'warn' : 'error',
+      status: metaHasKeyword && metaGoodLength ? 'ok' : 'warn',
       statusLabel: metaHasKeyword && metaGoodLength ? 'Optimised' : '1 fejl',
       detail: metaHasKeyword
         ? metaGoodLength
@@ -281,12 +281,10 @@ export function analyzeSeo(input: SeoInput): SeoResult {
       id: 'structured-data',
       label: 'Structured Data',
       status: (input.structuredDataTypes && input.structuredDataTypes.length > 0) ? 'ok' : 'warn',
-      statusLabel: (input.structuredDataTypes && input.structuredDataTypes.length > 0)
-        ? `Aktiv: ${input.structuredDataTypes.join(', ')}`
-        : 'Ikke bekræftet',
+      statusLabel: (input.structuredDataTypes && input.structuredDataTypes.length > 0) ? `Aktiv: ${input.structuredDataTypes.join(', ')}` : 'Ikke bekræftet',
       detail: (input.structuredDataTypes && input.structuredDataTypes.length > 0)
-        ? `✓ Structured data bekræftet: ${input.structuredDataTypes.join(', ')}. Husk at teste med Google Rich Results Test: https://search.google.com/test/rich-results`
-        : `Structured data er ikke markeret som implementeret. Angiv hvilke JSON-LD schema-typer siden bruger i venstre panel, så scoren opdateres. Test med Google Rich Results Test: https://search.google.com/test/rich-results`,
+        ? `✓ Structured data bekræftet: ${input.structuredDataTypes.join(', ')}. Test med Google Rich Results Test: https://search.google.com/test/rich-results`
+        : `Structured data er ikke markeret. Angiv JSON-LD schema-typer i venstre panel. Test med Google Rich Results Test: https://search.google.com/test/rich-results`,
     },
   ]
 
