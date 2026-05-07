@@ -162,7 +162,6 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   
   if (internalLinks >= 1) score += 5
 
-  // Structured data (5 pts) – user-confirmed via checkboxes
   if (input.structuredDataTypes && input.structuredDataTypes.length > 0) score += 5
 
   const percentage = Math.min(Math.round(score), 100)
@@ -280,11 +279,9 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     {
       id: 'structured-data',
       label: 'Structured Data',
-      status: (input.structuredDataTypes && input.structuredDataTypes.length > 0) ? 'ok' : 'warn',
-      statusLabel: (input.structuredDataTypes && input.structuredDataTypes.length > 0) ? `Aktiv: ${input.structuredDataTypes.join(', ')}` : 'Ikke bekræftet',
-      detail: (input.structuredDataTypes && input.structuredDataTypes.length > 0)
-        ? `✓ Structured data bekræftet: ${input.structuredDataTypes.join(', ')}. Test med Google Rich Results Test: https://search.google.com/test/rich-results`
-        : `Structured data er ikke markeret. Angiv JSON-LD schema-typer i venstre panel. Test med Google Rich Results Test: https://search.google.com/test/rich-results`,
+      status: 'warn',
+      statusLabel: 'Tjek manuelt',
+      detail: `Structured data kan ikke detekteres automatisk via scraping. Tjek manuelt om du har JSON-LD schema (HotelRoom, Product, FAQPage, Organization) i din <head>. Test med Google Rich Results Test: https://search.google.com/test/rich-results`,
     },
   ]
 

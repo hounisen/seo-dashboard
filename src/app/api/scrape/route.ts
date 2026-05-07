@@ -20,32 +20,21 @@ function cleanMarkdown(md: string): string {
   const cleaned: string[] = []
   let skipBlock = false
   let skipUntilNextHeading = false
-
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    const t = line.trim()
-
-    if (/^\[hoteloasia\]|^\[View Instagram|instagram\.com\/p\/|instagram\.com\/reel\//.test(t)) { skipBlock = true }
-    if (skipBlock) {
-      if (/^#{1,3}\s/.test(t) && !/instagram|hoteloasia/i.test(t)) skipBlock = false
-      else continue
-    }
-
-    if (/bliv en del af|tilmeld.*nyhedsbrev|få nyheder.*eksklusive|sign up for our|subscribe to our/i.test(t)) { skipUntilNextHeading = true }
-    if (skipUntilNextHeading) {
-      if (/^#{1,3}\s/.test(t)) skipUntilNextHeading = false
-      else continue
-    }
-
+    const line = lines[i], t = line.trim()
+    if (/^\[hoteloasia\]|^\[View Instagram|instagram\.com\/p\/|instagram\.com\/reel\//.test(t)) skipBlock = true
+    if (skipBlock) { if (/^#{1,3}\s/.test(t) && !/instagram|hoteloasia/i.test(t)) skipBlock = false; else continue }
+    if (/bliv en del af|tilmeld.*nyhedsbrev|få nyheder.*eksklusive/i.test(t)) skipUntilNextHeading = true
+    if (skipUntilNextHeading) { if (/^#{1,3}\s/.test(t)) skipUntilNextHeading = false; else continue }
     if (/^-\s+\[.+?\]\(https?:\/\/.+?\)$/.test(t)) continue
     if (/^-\s+[^\[].{1,60}$/.test(t) && !/[.,:;!?]/.test(t) && i < 10) continue
     if (t.startsWith('![') || t.startsWith('[![')) continue
     if (/GetImage\.ashx|\/Files\/Images\/Ecom\//.test(t)) continue
     if (/^\*\*(Varenummer|Varenavn|Måleområde|Lagerstatus|Bestillingsnummer|Art\.?nr):\*\*/i.test(t)) continue
-    if (/^(På lager|Ikke på lager|Udgået|Kan bestilles|In stock|Out of stock)$/i.test(t)) continue
+    if (/^(På lager|Ikke på lager|Udgået|Kan bestilles)$/i.test(t)) continue
     if (/^(Vis alle|Vis kun|Sortering|Alfabetisk|Varenummer|Popularitet|Brand[A-Z])/i.test(t)) continue
     if (/\d+\s+produkter?\s+i\s+kategorien/i.test(t)) continue
-    if (/^\[(Se produkt|Tilføj til kurv|Køb nu|Log ind|Bliv kunde|Opret|Add to cart)\]/i.test(t)) continue
+    if (/^\[(Se produkt|Tilføj til kurv|Køb nu|Log ind|Bliv kunde|Opret)\]/i.test(t)) continue
     if (/for at se priser og købe/i.test(t)) continue
     if (/^\[Log ind\].*\[Bliv kunde\]/i.test(t)) continue
     if (/^Tlf\.?\s*[\d\s()+-]{6,}$/.test(t)) continue
@@ -56,15 +45,12 @@ function cleanMarkdown(md: string): string {
     if (/^\[(Facebook|Twitter|Linkedin|Pinterest|Email|Instagram|Share|Open post|Scroll)/.test(t)) continue
     if (/^https?:\/\/\S+$/.test(t)) continue
     if (/Hide photo|Add ID to|Hide Specific Photos/.test(t)) continue
-    if (/^\|[\s]*\|$/.test(t)) continue
-    if (/^\|[\s]*####\s*\[/.test(t)) continue
-    if (/^\|[\s]*---[\s]*\|$/.test(t)) continue
+    if (/^\|[\s]*\|$/.test(t) || /^\|[\s]*####\s*\[/.test(t) || /^\|[\s]*---[\s]*\|$/.test(t)) continue
     if (/^[-|\s]+$/.test(t) && t.length > 0) continue
     if (/^@[a-zA-Z0-9_]+$/.test(t)) continue
     if (/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}$/.test(t)) continue
     if (/scontent-cph|cdninstagram\.com/.test(t)) continue
     if (/persondatapolitik|handelsbetingelser|privatlivspolitik|cookiepolitik/i.test(t) && t.length < 150) continue
-
     cleaned.push(line)
   }
   return cleaned.join('\n').replace(/\n{3,}/g, '\n\n').trim()
