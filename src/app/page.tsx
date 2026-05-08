@@ -14,6 +14,7 @@ interface FormState {
   metaDescription: string
   h1: string
   bodyContent: string
+  structuredDataTypes: string[]
 }
 
 interface GscData {
@@ -22,6 +23,39 @@ interface GscData {
   clicks: number
   position: number
 }
+
+interface ScrapedSnapshot {
+  pageTitle: string
+  metaDescription: string
+  h1: string
+  bodyContent: string
+}
+
+interface AhrefsRow {
+  keyword: string
+  prevPosition: number | null
+  currPosition: number | null
+  posChange: number | null
+  volume: number
+  primaryUrl: string
+  otherUrls: string[]
+  clicks: number
+  impressions: number
+  ctr: number
+  gscPosition: number
+}
+
+const SCHEMA_TYPES = [
+  { id: 'Product',        label: 'Product',        icon: '🛒' },
+  { id: 'FAQPage',        label: 'FAQ Page',        icon: '❓' },
+  { id: 'Organization',   label: 'Organization',   icon: '🏢' },
+  { id: 'HotelRoom',      label: 'Hotel Room',     icon: '🛏️' },
+  { id: 'LocalBusiness',  label: 'Local Business', icon: '📍' },
+  { id: 'Article',        label: 'Article',        icon: '📄' },
+  { id: 'BreadcrumbList', label: 'Breadcrumb',     icon: '🔗' },
+  { id: 'ItemList',       label: 'Item List',      icon: '📋' },
+  { id: 'Carousel',       label: 'Karrusel',       icon: '🎠' },
+]
 
 const DEFAULT_FORM: FormState = {
   url: '',
@@ -33,6 +67,7 @@ const DEFAULT_FORM: FormState = {
   metaDescription: '',
   h1: '',
   bodyContent: '',
+  structuredDataTypes: [],
 }
 
 // ── Helper components ─────────────────────────────────────────────────────────
@@ -115,6 +150,284 @@ function ProgressBar({ pct }: { pct: number }) {
   )
 }
 
+
+// ── Live Editor ───────────────────────────────────────────────────────────────
+interface LiveEditorProps {
+  scraped: ScrapedSnapshot
+  form: FormState
+  updateForm: (key: keyof FormState, val: string) => void
+  setForm: React.Dispatch<React.SetStateAction<FormState>>
+  result: SeoResult | null
+  originalResult: SeoResult | null
+}
+
+function LiveEditor({ scraped, form, updateForm, setForm, result, originalResult }: LiveEditorProps) {
+  const pct = result?.percentage ?? 0
+  const origPct = originalResult?.percentage ?? 0
+  const delta = pct - origPct
+  const hasChanges = scraped.pageTitle !== form.pageTitle || scraped.metaDescription !== form.metaDescription
+    || scraped.h1 !== form.h1 || scraped.bodyContent !== form.bodyContent
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+      <div className="px-6 py-4 border-b border-gray-100" style={{ background: 'linear-gradient(135deg, #f8f9ff 0%, #eef2ff 100%)' }}>
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs font-bold tracking-widest uppercase text-indigo-400 mb-0.5">Live Tekst Editor</p>
+            <p className="text-xs text-gray-500">Rediger direkte – scoren opdateres øjeblikkeligt</p>
+          </div>
+          {originalResult && (
+            <div className="text-right">
+              <div className="flex items-center gap-2 justify-end">
+                <span className="text-xs text-gray-400">Score</span>
+                <span className={`text-2xl font-extrabold tabular-nums ${pct >= 70 ? 'text-emerald-600' : pct >= 45 ? 'text-amber-600' : 'text-red-500'}`}>{pct}%</span>
+                {delta !== 0 && <span className={`text-sm font-bold px-2 py-0.5 rounded-full ${delta > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>{delta > 0 ? `▲ +${delta}` : `▼ ${delta}`}</span>}
+              </div>
+              <p className="text-xs text-gray-400 mt-0.5">Originalt: {origPct}%</p>
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="p-6 space-y-5">
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Title Tag</label>
+            <span className={`text-xs tabular-nums font-semibold ${form.pageTitle.length > 65 ? 'text-red-400' : form.pageTitle.length >= 30 ? 'text-emerald-500' : 'text-gray-400'}`}>{form.pageTitle.length}/65</span>
+          </div>
+          {scraped.pageTitle && scraped.pageTitle !== form.pageTitle && <p className="text-xs text-gray-400 mb-1.5 line-through truncate">{scraped.pageTitle}</p>}
+          <input type="text" value={form.pageTitle} onChange={e => updateForm('pageTitle', e.target.value)}
+            className={`w-full px-4 py-3 rounded-xl border text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 transition ${scraped.pageTitle && scraped.pageTitle !== form.pageTitle ? 'border-indigo-200 bg-indigo-50/30' : 'border-gray-200'}`}
+            placeholder="Skriv din title tag..." />
+        </div>
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Meta Description</label>
+            <span className={`text-xs tabular-nums font-semibold ${form.metaDescription.length > 160 ? 'text-red-400' : form.metaDescription.length >= 120 ? 'text-emerald-500' : 'text-gray-400'}`}>{form.metaDescription.length}/160</span>
+          </div>
+          {scraped.metaDescription && scraped.metaDescription !== form.metaDescription && <p className="text-xs text-gray-400 mb-1.5 line-through line-clamp-2">{scraped.metaDescription}</p>}
+          <textarea rows={3} value={form.metaDescription} onChange={e => updateForm('metaDescription', e.target.value)}
+            className={`w-full px-4 py-3 rounded-xl border text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 transition resize-none ${scraped.metaDescription && scraped.metaDescription !== form.metaDescription ? 'border-indigo-200 bg-indigo-50/30' : 'border-gray-200'}`}
+            placeholder="Skriv din meta description..." />
+        </div>
+        <div>
+          <label className="text-xs font-bold text-gray-600 uppercase tracking-wide block mb-1.5">H1 Overskrift</label>
+          {scraped.h1 && scraped.h1 !== form.h1 && <p className="text-xs text-gray-400 mb-1.5 line-through truncate">{scraped.h1}</p>}
+          <input type="text" value={form.h1} onChange={e => updateForm('h1', e.target.value)}
+            className={`w-full px-4 py-3 rounded-xl border text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 transition ${scraped.h1 && scraped.h1 !== form.h1 ? 'border-indigo-200 bg-indigo-50/30' : 'border-gray-200'}`}
+            placeholder="Skriv din H1..." />
+        </div>
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Brødtekst / Indhold</label>
+            <div className="flex items-center gap-2">
+              {result && originalResult && result.wordCount !== originalResult.wordCount && (
+                <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${result.wordCount > originalResult.wordCount ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
+                  {result.wordCount > originalResult.wordCount ? '+' : ''}{result.wordCount - originalResult.wordCount} ord
+                </span>
+              )}
+              <span className={`text-xs tabular-nums font-semibold ${(result?.wordCount ?? 0) >= 800 ? 'text-emerald-500' : (result?.wordCount ?? 0) >= 300 ? 'text-amber-500' : 'text-gray-400'}`}>
+                {result?.wordCount ?? form.bodyContent.split(/\s+/).filter(Boolean).length} ord
+              </span>
+            </div>
+          </div>
+          <textarea rows={10} value={form.bodyContent} onChange={e => updateForm('bodyContent', e.target.value)}
+            className={`w-full px-4 py-3 rounded-xl border text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 transition resize-y ${scraped.bodyContent && scraped.bodyContent !== form.bodyContent ? 'border-indigo-200 bg-indigo-50/30' : 'border-gray-200'}`}
+            placeholder="Indsæt eller rediger sidens brødtekst..." />
+        </div>
+        {(scraped.pageTitle || scraped.metaDescription || scraped.h1 || scraped.bodyContent) && (
+          <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+            <p className="text-xs text-gray-400">
+              {hasChanges ? [scraped.pageTitle !== form.pageTitle && 'title', scraped.metaDescription !== form.metaDescription && 'meta', scraped.h1 !== form.h1 && 'H1', scraped.bodyContent !== form.bodyContent && 'indhold'].filter(Boolean).join(', ') + ' ændret' : 'Ingen ændringer'}
+            </p>
+            <button onClick={() => setForm(prev => ({ ...prev, pageTitle: scraped.pageTitle, metaDescription: scraped.metaDescription, h1: scraped.h1, bodyContent: scraped.bodyContent }))}
+              className="text-xs text-indigo-500 hover:text-indigo-700 font-semibold transition">↺ Nulstil til original</button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Ahrefs Panel ──────────────────────────────────────────────────────────────
+function AhrefsPanel({ data }: { data: AhrefsRow[] }) {
+  const cannibal = data.filter(r => r.otherUrls.length > 0)
+  const quickWins = data.filter(r => {
+    const pos = r.gscPosition || r.prevPosition || 0
+    return r.volume > 50 && pos >= 11 && pos <= 40 && r.impressions > 50 && r.ctr < 0.03
+  })
+  const urlCount: Record<string, number> = {}
+  data.forEach(r => { if (r.primaryUrl) urlCount[r.primaryUrl] = (urlCount[r.primaryUrl] || 0) + 1 })
+  const dominantUrl = Object.entries(urlCount).sort((a, b) => b[1] - a[1])[0]
+  const shortUrl = (url: string) => { try { return '/' + new URL(url).pathname.split('/').filter(Boolean).slice(-2).join('/') } catch { return url.slice(-40) } }
+  return (
+    <div className="space-y-5">
+      {cannibal.length > 0 && (
+        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up">
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-lg">⚠️</span>
+            <p className="text-xs font-bold tracking-widest uppercase text-red-400">Kannibalisering opdaget</p>
+            <span className="ml-auto px-2 py-0.5 bg-red-50 text-red-600 text-xs font-bold rounded-full">{cannibal.length} keywords</span>
+          </div>
+          <div className="space-y-3">
+            {cannibal.map((r, i) => (
+              <div key={i} className="p-4 bg-red-50 rounded-xl border border-red-100">
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-bold text-sm text-gray-800">{r.keyword}</span>
+                    {r.volume > 0 && <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded font-medium">{r.volume.toLocaleString()} søgn/md</span>}
+                    {(r.gscPosition || r.prevPosition) && <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-medium">Pos {(r.gscPosition || r.prevPosition)?.toFixed(0)}</span>}
+                  </div>
+                  <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold flex-shrink-0">{r.otherUrls.length + 1} URLs</span>
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-xs"><span className="w-2 h-2 bg-emerald-400 rounded-full flex-shrink-0" /><span className="text-gray-500">Vinder:</span><span className="font-mono text-gray-700 truncate">{shortUrl(r.primaryUrl)}</span></div>
+                  {r.otherUrls.map((u, j) => <div key={j} className="flex items-center gap-2 text-xs"><span className="w-2 h-2 bg-red-400 rounded-full flex-shrink-0" /><span className="text-gray-500">Kannibaliserer:</span><span className="font-mono text-gray-600 truncate">{shortUrl(u)}</span></div>)}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+            <strong>Anbefaling:</strong> Sæt kanonisk tag på de kannibaliserende sider eller konsolider med 301-redirects.
+          </div>
+        </div>
+      )}
+      {quickWins.length > 0 && (
+        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up">
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-lg">🎯</span>
+            <p className="text-xs font-bold tracking-widest uppercase text-emerald-500">Quick Wins – lavthængende frugt</p>
+            <span className="ml-auto px-2 py-0.5 bg-emerald-50 text-emerald-600 text-xs font-bold rounded-full">{quickWins.length} keywords</span>
+          </div>
+          <div className="space-y-2">
+            {quickWins.map((r, i) => {
+              const pos = r.gscPosition || r.prevPosition || 0
+              return (
+                <div key={i} className="flex items-center justify-between p-3 bg-emerald-50 rounded-xl border border-emerald-100">
+                  <div>
+                    <span className="font-semibold text-sm text-gray-800">{r.keyword}</span>
+                    <div className="flex gap-3 mt-1">
+                      <span className="text-xs text-gray-500">{r.volume} søgn/md</span>
+                      <span className="text-xs text-gray-500">{r.impressions.toLocaleString()} visninger</span>
+                      <span className="text-xs text-red-500">CTR {(r.ctr * 100).toFixed(1)}%</span>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className={`text-lg font-bold tabular-nums ${pos <= 20 ? 'text-amber-600' : 'text-red-500'}`}>#{pos.toFixed(0)}</span>
+                    <p className="text-xs text-gray-400">position</p>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+      {dominantUrl && dominantUrl[1] >= 4 && (
+        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-lg">🔍</span>
+            <p className="text-xs font-bold tracking-widest uppercase text-purple-400">URL-dominans</p>
+          </div>
+          <p className="text-sm text-gray-700 mb-2">Én URL ranker for <strong>{dominantUrl[1]} ud af {data.length}</strong> keywords:</p>
+          <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg font-mono text-xs text-purple-800 break-all">{dominantUrl[0]}</div>
+        </div>
+      )}
+      <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up">
+        <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">Alle Keywords – Overblik</p>
+        <div className="overflow-x-auto -mx-2">
+          <table className="w-full text-sm min-w-[640px]">
+            <thead><tr className="border-b border-gray-100">{['Keyword','Volume','Ahrefs pos.','GSC pos.','Visninger','CTR','Ændring'].map(h => <th key={h} className="text-left text-xs font-bold tracking-widest uppercase text-gray-400 pb-3 px-3">{h}</th>)}</tr></thead>
+            <tbody>
+              {data.map((r, i) => {
+                const pos = r.prevPosition || r.currPosition
+                const isCannibal = r.otherUrls.length > 0
+                const posColor = !pos ? 'text-gray-300' : pos <= 3 ? 'text-emerald-600' : pos <= 10 ? 'text-amber-600' : 'text-red-500'
+                return (
+                  <tr key={i} className={`border-b border-gray-50 hover:bg-gray-50 transition ${isCannibal ? 'bg-red-50/30' : ''}`}>
+                    <td className="py-3 px-3 font-medium text-gray-800"><div className="flex items-center gap-2">{r.keyword}{isCannibal && <span className="text-xs bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full font-bold">⚡ kannibal</span>}</div></td>
+                    <td className="py-3 px-3 text-gray-600 tabular-nums">{r.volume > 0 ? r.volume.toLocaleString() : '–'}</td>
+                    <td className={`py-3 px-3 font-bold tabular-nums ${posColor}`}>{pos ? `#${pos}` : '–'}</td>
+                    <td className="py-3 px-3 text-gray-600 tabular-nums">{r.gscPosition ? `#${r.gscPosition.toFixed(0)}` : '–'}</td>
+                    <td className="py-3 px-3 text-gray-600 tabular-nums">{r.impressions > 0 ? r.impressions.toLocaleString() : '–'}</td>
+                    <td className="py-3 px-3 text-gray-600 tabular-nums">{r.impressions > 0 ? `${(r.ctr * 100).toFixed(1)}%` : '–'}</td>
+                    <td className="py-3 px-3">{r.posChange ? <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${r.posChange > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>{r.posChange > 0 ? `▲ +${r.posChange}` : `▼ ${r.posChange}`}</span> : <span className="text-xs text-gray-300">–</span>}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── GSC Sidebar Preview ───────────────────────────────────────────────────────
+function GscPreview({ data }: { data: GscData[] }) {
+  const [expanded, setExpanded] = useState(false)
+  const show = expanded ? data : data.slice(0, 5)
+  return (
+    <div className="mt-3 rounded-xl border border-gray-100 overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs min-w-[300px]">
+          <thead><tr className="bg-gray-50 border-b border-gray-100">
+            <th className="text-left text-gray-400 font-bold uppercase tracking-wide py-2 px-3">Keyword</th>
+            <th className="text-right text-gray-400 font-bold uppercase tracking-wide py-2 px-3">Klik</th>
+            <th className="text-right text-gray-400 font-bold uppercase tracking-wide py-2 px-3">Visn.</th>
+            <th className="text-right text-gray-400 font-bold uppercase tracking-wide py-2 px-3">Pos.</th>
+          </tr></thead>
+          <tbody>
+            {show.map((r, i) => (
+              <tr key={i} className="border-b border-gray-50 hover:bg-gray-50 transition">
+                <td className="py-2 px-3 font-medium text-gray-700 truncate max-w-[140px]">{r.keyword}</td>
+                <td className="py-2 px-3 text-right tabular-nums text-gray-600">{r.clicks}</td>
+                <td className="py-2 px-3 text-right tabular-nums text-gray-600">{r.impressions.toLocaleString()}</td>
+                <td className={`py-2 px-3 text-right tabular-nums font-bold ${r.position <= 3 ? 'text-emerald-600' : r.position <= 10 ? 'text-amber-600' : 'text-red-500'}`}>{r.position.toFixed(1)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {data.length > 5 && <button onClick={() => setExpanded(!expanded)} className="w-full py-2 text-xs text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition font-medium">{expanded ? '↑ Vis færre' : `↓ Vis alle ${data.length} keywords`}</button>}
+    </div>
+  )
+}
+
+// ── Ahrefs Sidebar Preview ────────────────────────────────────────────────────
+function AhrefsPreview({ data }: { data: AhrefsRow[] }) {
+  const [expanded, setExpanded] = useState(false)
+  const show = expanded ? data : data.slice(0, 5)
+  const cannibalCount = data.filter(r => r.otherUrls.length > 0).length
+  return (
+    <div className="mt-3 rounded-xl border border-gray-100 overflow-hidden">
+      {cannibalCount > 0 && <div className="px-3 py-2 bg-red-50 border-b border-red-100 text-xs text-red-600 font-semibold">⚡ {cannibalCount} af {data.length} keywords har kannibalisering</div>}
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs min-w-[300px]">
+          <thead><tr className="bg-gray-50 border-b border-gray-100">
+            <th className="text-left text-gray-400 font-bold uppercase tracking-wide py-2 px-3">Keyword</th>
+            <th className="text-right text-gray-400 font-bold uppercase tracking-wide py-2 px-3">Vol.</th>
+            <th className="text-right text-gray-400 font-bold uppercase tracking-wide py-2 px-3">Pos.</th>
+            <th className="text-right text-gray-400 font-bold uppercase tracking-wide py-2 px-3">URLs</th>
+          </tr></thead>
+          <tbody>
+            {show.map((r, i) => {
+              const pos = r.prevPosition || r.currPosition
+              const isCannibal = r.otherUrls.length > 0
+              return (
+                <tr key={i} className={`border-b border-gray-50 hover:bg-gray-50 transition ${isCannibal ? 'bg-red-50/40' : ''}`}>
+                  <td className="py-2 px-3 font-medium text-gray-700 truncate max-w-[130px]"><div className="flex items-center gap-1">{isCannibal && <span className="text-red-400 flex-shrink-0">⚡</span>}<span className="truncate">{r.keyword}</span></div></td>
+                  <td className="py-2 px-3 text-right tabular-nums text-gray-600">{r.volume > 0 ? r.volume.toLocaleString() : '–'}</td>
+                  <td className={`py-2 px-3 text-right tabular-nums font-bold ${!pos ? 'text-gray-300' : pos <= 3 ? 'text-emerald-600' : pos <= 10 ? 'text-amber-600' : 'text-red-500'}`}>{pos ? `#${pos}` : '–'}</td>
+                  <td className="py-2 px-3 text-right tabular-nums"><span className={`px-1.5 py-0.5 rounded text-xs font-bold ${isCannibal ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-500'}`}>{r.otherUrls.length + (r.primaryUrl ? 1 : 0)}</span></td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+      {data.length > 5 && <button onClick={() => setExpanded(!expanded)} className="w-full py-2 text-xs text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition font-medium">{expanded ? '↑ Vis færre' : `↓ Vis alle ${data.length} keywords`}</button>}
+    </div>
+  )
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function SeoDashboard() {
@@ -126,6 +439,11 @@ export default function SeoDashboard() {
   const [activeTab, setActiveTab] = useState<'form' | 'dashboard'>('form')
   const [gscData, setGscData] = useState<GscData[]>([])
   const [gscFileName, setGscFileName] = useState('')
+  const [ahrefsData, setAhrefsData] = useState<AhrefsRow[]>([])
+  const [ahrefsFileName, setAhrefsFileName] = useState('')
+  const [scraped, setScraped] = useState<ScrapedSnapshot>({ pageTitle: '', metaDescription: '', h1: '', bodyContent: '' })
+  const [originalResult, setOriginalResult] = useState<SeoResult | null>(null)
+  const [activePanel, setActivePanel] = useState<'dashboard' | 'ahrefs'>('dashboard')
   const [competitorAnalysis, setCompetitorAnalysis] = useState<{url: string, result: SeoResult}[]>([])
   const [analyzingCompetitor, setAnalyzingCompetitor] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -142,9 +460,24 @@ export default function SeoDashboard() {
       metaDescription: form.metaDescription,
       h1: form.h1,
       bodyContent: form.bodyContent,
+      structuredDataTypes: form.structuredDataTypes,
     }
     setResult(analyzeSeo(input))
   }, [form])
+
+  // Recalculate originalResult when keywords or scraped snapshot changes
+  useEffect(() => {
+    if (!form.targetKeyword || !scraped.pageTitle) return
+    setOriginalResult(analyzeSeo({
+      url: form.url, competitorUrls: [],
+      targetKeyword: form.targetKeyword.trim(),
+      semanticKeywords: form.semanticKeywords.split(',').map(s => s.trim()).filter(Boolean),
+      pageTitle: scraped.pageTitle, metaDescription: scraped.metaDescription,
+      h1: scraped.h1, bodyContent: scraped.bodyContent,
+      structuredDataTypes: form.structuredDataTypes,
+    }))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.targetKeyword, form.semanticKeywords, scraped, form.structuredDataTypes])
 
   const updateForm = useCallback((key: keyof FormState, val: string) => {
     setForm(prev => ({ ...prev, [key]: val }))
@@ -166,20 +499,38 @@ export default function SeoDashboard() {
         setScrapeError(data.error ?? 'Scraping fejlede')
         return
       }
+      const newTitle = data.title || ''
+      const newMeta = data.description || ''
+      const newH1 = data.h1 || ''
+      const newBody = data.bodyContent || ''
+
+      // Save immutable snapshot of scraped content (used by Live Editor diff)
+      setScraped({ pageTitle: newTitle, metaDescription: newMeta, h1: newH1, bodyContent: newBody })
+
       setForm(prev => ({
         ...prev,
-        pageTitle: data.title || prev.pageTitle,
-        metaDescription: data.description || prev.metaDescription,
-        h1: data.h1 || prev.h1,
-        bodyContent: data.bodyContent || prev.bodyContent,
-        // semanticKeywords: Keep existing - user manages manually
+        pageTitle: newTitle || prev.pageTitle,
+        metaDescription: newMeta || prev.metaDescription,
+        h1: newH1 || prev.h1,
+        bodyContent: newBody || prev.bodyContent,
       }))
+
+      // Lock in the "original" score from scraped content
+      if (form.targetKeyword) {
+        setOriginalResult(analyzeSeo({
+          url: form.url, competitorUrls: [],
+          targetKeyword: form.targetKeyword.trim(),
+          semanticKeywords: form.semanticKeywords.split(',').map(s => s.trim()).filter(Boolean),
+          pageTitle: newTitle, metaDescription: newMeta, h1: newH1, bodyContent: newBody,
+          structuredDataTypes: form.structuredDataTypes,
+        }))
+      }
     } catch {
       setScrapeError('Netværksfejl – tjek din forbindelse')
     } finally {
       setScraping(false)
     }
-  }, [form.url])
+  }, [form.url, form.targetKeyword, form.semanticKeywords, form.structuredDataTypes])
 
   // Handle GSC CSV upload
   const handleGscUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -249,6 +600,42 @@ export default function SeoDashboard() {
     }
   }, [])
 
+  // Ahrefs+GSC Excel upload
+  const handleAhrefsUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]; if (!file) return
+    setAhrefsFileName(file.name)
+    const reader = new FileReader()
+    reader.onload = async (evt) => {
+      try {
+        const XLSX = await import('xlsx')
+        const wb = XLSX.read(evt.target?.result, { type: 'array' })
+        const ws = wb.Sheets[wb.SheetNames[0]]
+        const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null }) as (string | number | null)[][]
+        const rows: AhrefsRow[] = []
+        for (let i = 2; i < raw.length; i++) {
+          const r = raw[i]; if (!r[0]) continue
+          const otherRaw = r[6] ? String(r[6]).split('\n').map((s: string) => s.trim()).filter((s: string) => s.startsWith('http')) : []
+          rows.push({
+            keyword: String(r[0]),
+            prevPosition: r[1] != null ? Number(r[1]) : null,
+            currPosition: r[2] != null ? Number(r[2]) : null,
+            posChange: r[3] != null ? Number(r[3]) : null,
+            volume: r[4] != null ? Number(r[4]) : 0,
+            primaryUrl: r[5] ? String(r[5]) : '',
+            otherUrls: otherRaw,
+            clicks: r[7] != null ? Number(r[7]) : 0,
+            impressions: r[8] != null ? Number(r[8]) : 0,
+            ctr: r[9] != null ? Number(r[9]) : 0,
+            gscPosition: r[10] != null ? Number(r[10]) : 0,
+          })
+        }
+        setAhrefsData(rows)
+        if (rows.length > 0) setActivePanel('ahrefs')
+      } catch (err) { console.error('Ahrefs parse error:', err) }
+    }
+    reader.readAsArrayBuffer(file)
+  }, [])
+
   // Analyze competitor(s) - up to 2 competitors
   const analyzeCompetitor = useCallback(async () => {
     const competitorUrls = form.competitorUrls
@@ -306,17 +693,27 @@ export default function SeoDashboard() {
       {/* ── Top nav ── */}
       <nav className="bg-white border-b border-gray-100 sticky top-0 z-50 shadow-sm">
         <div className="px-4 sm:px-6 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center text-sm"
-              style={{ background: '#4f7fff', color: '#fff' }}>S</div>
+          <div className="flex items-center gap-3">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold text-white" style={{ background: '#4f7fff' }}>S</div>
             <span className="font-semibold text-sm text-gray-800">SEO Dashboard</span>
+            {ahrefsData.length > 0 && (
+              <div className="flex items-center gap-1 ml-2">
+                <button onClick={() => setActivePanel('dashboard')} className={`px-3 py-1 rounded-full text-xs font-semibold transition ${activePanel === 'dashboard' ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:bg-gray-100'}`}>Dashboard</button>
+                <button onClick={() => setActivePanel('ahrefs')} className={`px-3 py-1 rounded-full text-xs font-semibold transition ${activePanel === 'ahrefs' ? 'bg-purple-100 text-purple-700' : 'text-gray-500 hover:bg-gray-100'}`}>
+                  Ahrefs {ahrefsData.filter(r => r.otherUrls.length > 0).length > 0 && <span className="ml-1 bg-red-100 text-red-600 px-1 rounded">⚡{ahrefsData.filter(r => r.otherUrls.length > 0).length}</span>}
+                </button>
+              </div>
+            )}
           </div>
           {result && (
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-2 text-sm">
-                <span className={`font-bold tabular-nums ${pct >= 70 ? 'text-emerald-600' : pct >= 45 ? 'text-amber-600' : 'text-red-500'}`}>
-                  {pct}%
-                </span>
+                <span className={`font-bold tabular-nums ${pct >= 70 ? 'text-emerald-600' : pct >= 45 ? 'text-amber-600' : 'text-red-500'}`}>{pct}%</span>
+                {originalResult && pct !== originalResult.percentage && (
+                  <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${pct > originalResult.percentage ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
+                    {pct > originalResult.percentage ? '▲' : '▼'} {Math.abs(pct - originalResult.percentage)}%
+                  </span>
+                )}
                 <span className="text-gray-400 text-xs">SEO Score</span>
               </div>
               <button
@@ -380,9 +777,15 @@ export default function SeoDashboard() {
                         h1: '',
                         bodyContent: '',
                         competitorUrls: '',
+                        structuredDataTypes: [],
                       })
                       setGscData([])
                       setGscFileName('')
+                      setAhrefsData([])
+                      setAhrefsFileName('')
+                      setScraped({ pageTitle: '', metaDescription: '', h1: '', bodyContent: '' })
+                      setOriginalResult(null)
+                      setActivePanel('dashboard')
                       setCompetitorAnalysis([])
                       setScrapeError('')
                     }
@@ -488,8 +891,68 @@ export default function SeoDashboard() {
                     </label>
                   </div>
                   {gscData.length > 0 && (
-                    <p className="text-xs text-green-600 mt-1.5 font-medium">✓ {gscData.length} keywords indlæst fra GSC</p>
+                    <>
+                      <div className="flex items-center justify-between mt-2">
+                        <p className="text-xs text-green-600 font-medium">✓ {gscData.length} keywords indlæst</p>
+                        <button onClick={() => { setGscData([]); setGscFileName('') }} className="text-xs text-gray-400 hover:text-red-500 transition">× Fjern</button>
+                      </div>
+                      <GscPreview data={gscData} />
+                    </>
                   )}
+                </div>
+
+                {/* ── Ahrefs Upload ── */}
+                <div>
+                  <label className="text-xs font-semibold text-gray-500 block mb-1.5">
+                    Ahrefs + GSC analyse <span className="text-gray-300">(Excel .xlsx)</span>
+                  </label>
+                  <input type="file" accept=".xlsx" onChange={handleAhrefsUpload} className="hidden" id="ahrefs-upload" />
+                  <label htmlFor="ahrefs-upload" className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl border-2 border-dashed border-purple-200 text-sm text-purple-500 hover:border-purple-400 hover:text-purple-700 transition cursor-pointer">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                    {ahrefsFileName || 'Upload Ahrefs+GSC Excel (kannibalisering m.m.)'}
+                  </label>
+                  {ahrefsData.length > 0 && (
+                    <>
+                      <div className="flex items-center justify-between mt-2">
+                        <div className="flex items-center gap-2">
+                          <p className="text-xs text-purple-600 font-medium">✓ {ahrefsData.length} keywords indlæst</p>
+                          {ahrefsData.filter(r => r.otherUrls.length > 0).length > 0 && (
+                            <span className="text-xs bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full font-bold">⚡ {ahrefsData.filter(r => r.otherUrls.length > 0).length} kannibal.</span>
+                          )}
+                        </div>
+                        <button onClick={() => { setAhrefsData([]); setAhrefsFileName(''); setActivePanel('dashboard') }} className="text-xs text-gray-400 hover:text-red-500 transition">× Fjern</button>
+                      </div>
+                      <AhrefsPreview data={ahrefsData} />
+                    </>
+                  )}
+                </div>
+
+                {/* ── Structured Data Checkboxes ── */}
+                <div>
+                  <label className="text-xs font-semibold text-gray-500 block mb-2">
+                    Structured Data / JSON-LD <span className="text-gray-300">(markér hvad siden har)</span>
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {SCHEMA_TYPES.map(schema => {
+                      const isChecked = form.structuredDataTypes.includes(schema.id)
+                      return (
+                        <button key={schema.id} type="button"
+                          onClick={() => setForm(prev => ({ ...prev, structuredDataTypes: isChecked ? prev.structuredDataTypes.filter(t => t !== schema.id) : [...prev.structuredDataTypes, schema.id] }))}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-medium transition-all text-left ${isChecked ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-gray-200 bg-gray-50 text-gray-500 hover:border-gray-300 hover:bg-gray-100'}`}>
+                          <span className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center ${isChecked ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300 bg-white'}`}>
+                            {isChecked && <span className="text-white text-xs leading-none">✓</span>}
+                          </span>
+                          <span>{schema.icon} {schema.label}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {form.structuredDataTypes.length > 0 && (
+                    <p className="text-xs text-emerald-600 mt-2 font-medium">✓ {form.structuredDataTypes.join(', ')} – tæller med i scoren</p>
+                  )}
+                  <p className="text-xs text-gray-400 mt-1.5">
+                    Tjek via <a href="https://search.google.com/test/rich-results" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">Google Rich Results Test</a>
+                  </p>
                 </div>
               </div>
             </div>
@@ -590,6 +1053,9 @@ export default function SeoDashboard() {
         {/* RIGHT PANEL - Results (60%) */}
         <div className="flex-1 overflow-y-auto bg-gray-50 p-6">
           <div className="max-w-5xl mx-auto space-y-5">
+            {activePanel === 'ahrefs' && ahrefsData.length > 0 && <AhrefsPanel data={ahrefsData} />}
+
+            {activePanel === 'dashboard' && (<>
             {!result ? (
               <div className="bg-white rounded-2xl p-12 text-center shadow-sm border border-gray-100">
                 <p className="text-gray-400 text-sm">Udfyld target keyword og scrape URL for at se analysen.</p>
@@ -762,6 +1228,9 @@ export default function SeoDashboard() {
                     </div>
                   </div>
                 )}
+
+                {/* Live Editor */}
+                <LiveEditor scraped={scraped} form={form} updateForm={updateForm} setForm={setForm} result={result} originalResult={originalResult} />
 
                 {/* Recommendations */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-1">
@@ -1106,6 +1575,7 @@ export default function SeoDashboard() {
                 })()}
               </>
             )}
+            </>)}
           </div>
         </div>
       </div>

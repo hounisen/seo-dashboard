@@ -16,22 +16,20 @@ function cleanMetaDescription(raw: string): string {
 }
 
 function cleanMarkdown(md: string): string {
-  const lines = md.split('\n')
-  const cleaned: string[] = []
-  let skipBlock = false
-  let skipUntilNextHeading = false
+  const lines = md.split('\n'); const cleaned: string[] = []
+  let skipBlock = false, skipUntil = false
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i], t = line.trim()
     if (/^\[hoteloasia\]|^\[View Instagram|instagram\.com\/p\/|instagram\.com\/reel\//.test(t)) skipBlock = true
     if (skipBlock) { if (/^#{1,3}\s/.test(t) && !/instagram|hoteloasia/i.test(t)) skipBlock = false; else continue }
-    if (/bliv en del af|tilmeld.*nyhedsbrev|få nyheder.*eksklusive/i.test(t)) skipUntilNextHeading = true
-    if (skipUntilNextHeading) { if (/^#{1,3}\s/.test(t)) skipUntilNextHeading = false; else continue }
+    if (/bliv en del af|tilmeld.*nyhedsbrev|få nyheder.*eksklusive/i.test(t)) skipUntil = true
+    if (skipUntil) { if (/^#{1,3}\s/.test(t)) skipUntil = false; else continue }
     if (/^-\s+\[.+?\]\(https?:\/\/.+?\)$/.test(t)) continue
     if (/^-\s+[^\[].{1,60}$/.test(t) && !/[.,:;!?]/.test(t) && i < 10) continue
     if (t.startsWith('![') || t.startsWith('[![')) continue
     if (/GetImage\.ashx|\/Files\/Images\/Ecom\//.test(t)) continue
-    if (/^\*\*(Varenummer|Varenavn|Måleområde|Lagerstatus|Bestillingsnummer|Art\.?nr):\*\*/i.test(t)) continue
-    if (/^(På lager|Ikke på lager|Udgået|Kan bestilles)$/i.test(t)) continue
+    if (/^\*\*(Varenummer|Varenavn|Måleområde|Lagerstatus|Art\.?nr):\*\*/i.test(t)) continue
+    if (/^(På lager|Ikke på lager|Udgået)$/i.test(t)) continue
     if (/^(Vis alle|Vis kun|Sortering|Alfabetisk|Varenummer|Popularitet|Brand[A-Z])/i.test(t)) continue
     if (/\d+\s+produkter?\s+i\s+kategorien/i.test(t)) continue
     if (/^\[(Se produkt|Tilføj til kurv|Køb nu|Log ind|Bliv kunde|Opret)\]/i.test(t)) continue
@@ -40,7 +38,7 @@ function cleanMarkdown(md: string): string {
     if (/^Tlf\.?\s*[\d\s()+-]{6,}$/.test(t)) continue
     if (/^\[.*@.*\]\(mailto:/.test(t)) continue
     if (/^[✓✔●•▸]\s/.test(t) && t.length < 80 && !/[.,:;]$/.test(t)) continue
-    if (/^(Dansk support|Dag-til-dag levering|Hurtig genbestilling|Faguddannet personale|Fragtfri|Gratis fragt)(\s*\(.*\))?$/i.test(t)) continue
+    if (/^(Dansk support|Dag-til-dag levering|Hurtig genbestilling|Faguddannet personale)(\s*\(.*\))?$/i.test(t)) continue
     if (/^\[(Forrige|Næste|Scroll to top|Previous Slide|Next Slide)/i.test(t)) continue
     if (/^\[(Facebook|Twitter|Linkedin|Pinterest|Email|Instagram|Share|Open post|Scroll)/.test(t)) continue
     if (/^https?:\/\/\S+$/.test(t)) continue
