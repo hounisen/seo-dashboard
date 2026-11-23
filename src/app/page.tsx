@@ -25,6 +25,16 @@ interface GscData {
   position: number
 }
 
+interface KwOverviewRow {
+  keyword: string
+  volume: number
+  difficulty: number | null
+  intents: string
+  parentTopic: string
+  trafficPotential: number | null
+  cpc: number | null
+}
+
 interface ScrapedSnapshot {
   pageTitle: string
   metaDescription: string
@@ -444,6 +454,7 @@ export default function SeoDashboard() {
   const [ahrefsData, setAhrefsData] = useState<AhrefsRow[]>([])
   const [ahrefsFileName, setAhrefsFileName] = useState('')
   const [ahrefsError, setAhrefsError] = useState('')
+  const [kwOverview, setKwOverview] = useState<KwOverviewRow[]>([])
   const [scraped, setScraped] = useState<ScrapedSnapshot>({ pageTitle: '', metaDescription: '', h1: '', bodyContent: '' })
   const [originalResult, setOriginalResult] = useState<SeoResult | null>(null)
   const [activePanel, setActivePanel] = useState<'dashboard' | 'ahrefs'>('dashboard')
@@ -618,6 +629,27 @@ export default function SeoDashboard() {
         const wb = XLSX.read(evt.target?.result, { type: 'array' })
         const ws = wb.Sheets[wb.SheetNames[0]]
         const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null }) as (string | number | null)[][]
+        // Ahrefs Keywords Explorer-eksport (Keyword, Volume, Difficulty, Intents ...)
+        const head = (raw[0] || []).map(h => String(h ?? '').trim().toLowerCase())
+        const iKw = head.indexOf('keyword'), iVol = head.indexOf('volume')
+        if (iKw >= 0 && iVol >= 0) {
+          const iDiff = head.indexOf('difficulty'), iInt = head.indexOf('intents'), iPar = head.indexOf('parent keyword')
+          const iTp = head.indexOf('traffic potential'), iCpc = head.indexOf('cpc')
+          const num = (v: unknown) => (v != null && v !== '' && !isNaN(Number(v)) ? Number(v) : null)
+          const ov: KwOverviewRow[] = []
+          for (let i = 1; i < raw.length; i++) {
+            const r = raw[i]; if (!r || !r[iKw]) continue
+            ov.push({
+              keyword: String(r[iKw]), volume: num(r[iVol]) ?? 0,
+              difficulty: iDiff >= 0 ? num(r[iDiff]) : null,
+              intents: iInt >= 0 && r[iInt] ? String(r[iInt]) : '',
+              parentTopic: iPar >= 0 && r[iPar] ? String(r[iPar]) : '',
+              trafficPotential: iTp >= 0 ? num(r[iTp]) : null,
+              cpc: iCpc >= 0 ? num(r[iCpc]) : null,
+            })
+          }
+          if (ov.length > 0) { setKwOverview(ov); setAhrefsFileName(file.name); return }
+        }
         const rows: AhrefsRow[] = []
         for (let i = 2; i < raw.length; i++) {
           const r = raw[i]; if (!r[0]) continue
@@ -933,6 +965,12 @@ export default function SeoDashboard() {
                     {ahrefsFileName || 'Upload Ahrefs+GSC Excel (kannibalisering m.m.)'}
                   </label>
                   {ahrefsError && <p className="text-xs text-red-500 mt-2">{ahrefsError}</p>}
+                  {kwOverview.length > 0 && (
+                    <div className="flex items-center justify-between mt-2">
+                      <p className="text-xs text-purple-600 font-medium">✓ Ahrefs keyword-oversigt: {kwOverview.length} keywords (vises på dashboardet)</p>
+                      <button onClick={() => { setKwOverview([]); setAhrefsFileName('') }} className="text-xs text-gray-400 hover:text-red-500 transition">× Fjern</button>
+                    </div>
+                  )}
                   {ahrefsData.length > 0 && (
                     <>
                       <div className="flex items-center justify-between mt-2">
@@ -942,7 +980,7 @@ export default function SeoDashboard() {
                             <span className="text-xs bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full font-bold">⚡ {ahrefsData.filter(r => r.otherUrls.length > 0).length} kannibal.</span>
                           )}
                         </div>
-                        <button onClick={() => { setAhrefsData([]); setAhrefsFileName(''); setAhrefsError(''); setActivePanel('dashboard') }} className="text-xs text-gray-400 hover:text-red-500 transition">× Fjern</button>
+                        <button onClick={() => { setAhrefsData([]); setKwOverview([]); setAhrefsFileName(''); setAhrefsError(''); setActivePanel('dashboard') }} className="text-xs text-gray-400 hover:text-red-500 transition">× Fjern</button>
                       </div>
                       <AhrefsPreview data={ahrefsData} />
                     </>
@@ -1355,6 +1393,40 @@ export default function SeoDashboard() {
                   </div>
                 </div>
 
+
+                {/* Ahrefs keyword-oversigt (volumen, KD, intent) */}
+                {kwOverview.length > 0 && (
+                  <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-3">
+                    <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">Ahrefs keyword-data · volumen, sværhedsgrad og intent</p>
+                    <div className="overflow-x-auto -mx-2">
+                      <table className="w-full text-sm min-w-[560px]">
+                        <thead>
+                          <tr className="border-b border-gray-100">
+                            {['Keyword', 'Volumen', 'KD', 'Trafikpotentiale', 'Intent (Ahrefs)', 'Samme emne som'].map(h => (
+                              <th key={h} className="text-left text-xs font-bold tracking-widest uppercase text-gray-400 pb-3 px-3">{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {kwOverview.map((k, i) => {
+                            const onPage = containsKeyword([form.pageTitle, form.metaDescription, form.h1, toPlainText(form.bodyContent)].join(' '), k.keyword)
+                            return (
+                              <tr key={i} className="border-b border-gray-50">
+                                <td className="py-3 px-3 font-medium text-gray-800">{k.keyword} <span className={`ml-1 text-xs font-semibold ${onPage ? 'text-emerald-600' : 'text-red-500'}`}>{onPage ? '✓ på siden' : '✗ mangler'}</span></td>
+                                <td className="py-3 px-3 text-gray-600 tabular-nums">{k.volume.toLocaleString()}</td>
+                                <td className="py-3 px-3 text-gray-600 tabular-nums">{k.difficulty ?? '–'}</td>
+                                <td className="py-3 px-3 text-gray-600 tabular-nums">{k.trafficPotential ?? '–'}</td>
+                                <td className="py-3 px-3 text-gray-600 text-xs">{k.intents || '–'}</td>
+                                <td className="py-3 px-3 text-gray-500 text-xs">{k.parentTopic || '–'}</td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="text-xs text-gray-400 mt-3">Intent fra Ahrefs er vejledende – vurdér selv i feltet "Søgeintention / B2B-match", om SERP'en passer til jeres målgruppe.</p>
+                  </div>
+                )}
 
                 {/* GSC Data comparison */}
                 {gscData.length > 0 && (
