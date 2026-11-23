@@ -443,6 +443,7 @@ export default function SeoDashboard() {
   const [gscFileName, setGscFileName] = useState('')
   const [ahrefsData, setAhrefsData] = useState<AhrefsRow[]>([])
   const [ahrefsFileName, setAhrefsFileName] = useState('')
+  const [ahrefsError, setAhrefsError] = useState('')
   const [scraped, setScraped] = useState<ScrapedSnapshot>({ pageTitle: '', metaDescription: '', h1: '', bodyContent: '' })
   const [originalResult, setOriginalResult] = useState<SeoResult | null>(null)
   const [activePanel, setActivePanel] = useState<'dashboard' | 'ahrefs'>('dashboard')
@@ -609,6 +610,7 @@ export default function SeoDashboard() {
   const handleAhrefsUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return
     setAhrefsFileName(file.name)
+    setAhrefsError('')
     const reader = new FileReader()
     reader.onload = async (evt) => {
       try {
@@ -619,6 +621,7 @@ export default function SeoDashboard() {
         const rows: AhrefsRow[] = []
         for (let i = 2; i < raw.length; i++) {
           const r = raw[i]; if (!r[0]) continue
+          if (!/[a-zA-ZæøåÆØÅ]/.test(String(r[0]))) continue
           const otherRaw = r[6] ? String(r[6]).split('\n').map((s: string) => s.trim()).filter((s: string) => s.startsWith('http')) : []
           rows.push({
             keyword: String(r[0]),
@@ -634,9 +637,18 @@ export default function SeoDashboard() {
             gscPosition: r[10] != null ? Number(r[10]) : 0,
           })
         }
-        setAhrefsData(rows)
-        if (rows.length > 0) setActivePanel('ahrefs')
-      } catch (err) { console.error('Ahrefs parse error:', err) }
+        const valid = rows.filter(r => r.primaryUrl.startsWith('http') || r.impressions > 0 || r.clicks > 0)
+        if (valid.length === 0) {
+          setAhrefsError('Filen ligner ikke Ahrefs+GSC-formatet (række 1 = kilder, række 2 = overskrifter, kolonne A = keyword, F = URL). Dashboardet er uændret.')
+          setAhrefsFileName('')
+          return
+        }
+        setAhrefsData(valid)
+      } catch (err) {
+        console.error('Ahrefs parse error:', err)
+        setAhrefsError('Filen kunne ikke læses. Dashboardet er uændret.')
+        setAhrefsFileName('')
+      }
     }
     reader.readAsArrayBuffer(file)
   }, [])
@@ -920,6 +932,7 @@ export default function SeoDashboard() {
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
                     {ahrefsFileName || 'Upload Ahrefs+GSC Excel (kannibalisering m.m.)'}
                   </label>
+                  {ahrefsError && <p className="text-xs text-red-500 mt-2">{ahrefsError}</p>}
                   {ahrefsData.length > 0 && (
                     <>
                       <div className="flex items-center justify-between mt-2">
@@ -929,7 +942,7 @@ export default function SeoDashboard() {
                             <span className="text-xs bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full font-bold">⚡ {ahrefsData.filter(r => r.otherUrls.length > 0).length} kannibal.</span>
                           )}
                         </div>
-                        <button onClick={() => { setAhrefsData([]); setAhrefsFileName(''); setActivePanel('dashboard') }} className="text-xs text-gray-400 hover:text-red-500 transition">× Fjern</button>
+                        <button onClick={() => { setAhrefsData([]); setAhrefsFileName(''); setAhrefsError(''); setActivePanel('dashboard') }} className="text-xs text-gray-400 hover:text-red-500 transition">× Fjern</button>
                       </div>
                       <AhrefsPreview data={ahrefsData} />
                     </>
