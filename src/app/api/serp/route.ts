@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
   const params = new URLSearchParams({
     select: 'position,title,url,page_type,type,update_date,domain_rating,traffic',
     keyword: keyword.trim(),
-    country: country.toUpperCase(),
+    country: country.toLowerCase(),
     top_positions: '10',
     output: 'json',
   })
@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
     if (!res.ok) {
       const msg = (json && (json.error || json.message)) || text.slice(0, 200) || `HTTP ${res.status}`
       const hint = res.status === 401 || res.status === 403 ? ' Tjek at API-nøglen er gyldig og har adgang til SERP Overview.' : res.status === 429 ? ' For mange kald – prøv igen om lidt.' : ''
-      return NextResponse.json({ error: `Ahrefs-fejl (${res.status}): ${msg}.${hint}` }, { status: 502 })
+      return NextResponse.json({ error: `Ahrefs-fejl (${res.status}): ${String(msg).slice(0, 180)}.${hint}` }, { status: 502 })
     }
     const positions = (json?.positions ?? []).map((p: any) => ({
       position: p.position,
