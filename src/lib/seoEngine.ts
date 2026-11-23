@@ -20,6 +20,9 @@ export interface SeoInput {
   // Valgfrit: GSC-data og manuel intent-vurdering (bruges til SEO-potentiale)
   gsc?: GscRow[]
   intentFit?: '' | 'match' | 'partial' | 'mismatch'
+  businessContext?: string
+  keywordApproval?: Record<string, 'godkendt' | 'afvist'>
+  kwData?: { keyword: string; volume: number; difficulty: number | null; intents: string }[]
 }
 
 export interface GscRow {
@@ -47,6 +50,23 @@ export interface RecommendationItem {
   status: 'ok' | 'warn' | 'error' | 'neutral'
   statusLabel: string
   detail: string
+}
+
+export interface FocusCandidate {
+  keyword: string
+  volume: number | null
+  kd: number | null
+  intents: string
+  context: 'sortiment' | 'afgrænset' | 'ikke-nævnt' | 'ukendt'
+  approval: 'godkendt' | 'afvist' | 'ikke-vurderet'
+  onPage: boolean
+}
+
+export interface FocusResult {
+  conclusion: 'primaer' | 'sidefokus' | 'intet-entydigt' | 'afventer'
+  headline: string
+  reason: string
+  candidates: FocusCandidate[]
 }
 
 export interface ScoreRow {
@@ -91,6 +111,7 @@ export interface SeoResult {
   verdict: string[]
   scoreBreakdown: ScoreRow[]
   scoreFormula: string
+  focus: FocusResult
 }
 
 // ── Fleksibel keyword-matching ──────────────────────────────────────────────
@@ -159,6 +180,88 @@ export function expectedCtr(pos: number): number {
   return 0.005
 }
 
+function parseContext(ctx: string): { fit: string; limit: string } {
+  const text = (ctx || '').replace(/<br\s*\/?>/gi, '\n')
+  if (!text.trim()) return { fit: '', limit: '' }
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
+  let fit = '', limit = ''
+  let labelled = false
+  for (const l of lines) {
+    const m = l.match(/^(målgruppe|formål|sortiment|afgrænsning|konvertering)\s*:\s*(.*)$/i)
+    if (m) {
+      labelled = true
+      const k = m[1].toLowerCase()
+      if (k === 'afgrænsning') limit += ' ' + m[2]
+      else fit += ' ' + m[2]
+    }
+  }
+  if (!labelled) fit = text
+  return { fit, limit }
+}
+
+function sigWords(keyword: string): string[] {
+  return keyword.toLowerCase().split(/[\s-]+/).filter(w => w.length >= 4 && !STOPWORDS.includes(w))
+}
+
+function wordHit(text: string, w: string): boolean {
+  const t = text.toLowerCase()
+  return t.includes(w) || (w.length >= 7 && t.includes(w.slice(0, 6)))
+}
+
+function contextMatch(keyword: string, ctx: { fit: string; limit: string }): FocusCandidate['context'] {
+  if (!ctx.fit.trim() && !ctx.limit.trim()) return 'ukendt'
+  const ws = sigWords(keyword)
+  if (ws.length === 0) return 'ukendt'
+  const share = (t: string) => ws.filter(w => wordHit(t, w)).length / ws.length
+  if (ctx.limit.trim() && share(ctx.limit) >= 0.5) return 'afgrænset'
+  if (share(ctx.fit) >= 0.67) return 'sortiment'
+  return 'ikke-nævnt'
+}
+
+export const normKw = (k: string) => k.toLowerCase().replace(/[\s-]+/g, '')
+
+function computeFocus(input: SeoInput, text: string, intentFit: SeoInput['intentFit']): FocusResult {
+  const ctx = parseContext(input.businessContext ?? '')
+  const names = Array.from(new Set([input.targetKeyword, ...input.semanticKeywords].filter(Boolean)))
+  const data = input.kwData ?? []
+  const candidates: FocusCandidate[] = names.map(k => {
+    const d = data.find(x => normKw(x.keyword) === normKw(k))
+    let context = contextMatch(k, ctx)
+    if (k === input.targetKeyword && intentFit === 'mismatch') context = 'afgrænset'
+    const approval = input.keywordApproval?.[normKw(k)] ?? 'ikke-vurderet'
+    return { keyword: k, volume: d ? d.volume : null, kd: d ? d.difficulty : null, intents: d ? d.intents : '', context, approval, onPage: containsKeyword(text, k) }
+  })
+  if (data.length === 0) {
+    return { conclusion: 'afventer', headline: 'Afventer søgedata', reason: 'Upload en Ahrefs keyword-oversigt for at sammenligne søgeefterspørgsel med sidens formål. Intet søgeord er valgt som primært.', candidates }
+  }
+  const withVol = candidates.filter(c => (c.volume ?? 0) > 0 && c.context !== 'afgrænset' && c.approval !== 'afvist')
+  if (withVol.length === 0) {
+    const phrase = input.h1 || input.pageTitle
+    return { conclusion: 'sidefokus', headline: `Anbefalet sidefokus: «${phrase}»`, reason: 'Ingen af kandidaterne har registreret søgevolumen (eller de ligger uden for sidens afgrænsning). Brug den formulering, der præcist beskriver siden – manglende volumen i Ahrefs betyder ikke, at ingen søger.', candidates }
+  }
+  const sum = withVol.reduce((a, c) => a + (c.volume ?? 0), 0)
+  const sorted = [...withVol].sort((a, b) => (b.context === 'sortiment' ? 1 : 0) - (a.context === 'sortiment' ? 1 : 0) || (b.volume ?? 0) - (a.volume ?? 0))
+  const maxVol = Math.max(...withVol.map(c => c.volume ?? 0))
+  if (withVol.length >= 3 && maxVol / sum < 0.5) {
+    return { conclusion: 'intet-entydigt', headline: 'Intet entydigt primært søgeord', reason: `Efterspørgslen er fordelt på flere mindre søgeord (største har ${Math.round((maxVol / sum) * 100)} % af den samlede volumen). Dæk dem samlet i stedet for at udpege ét.`, candidates }
+  }
+  const p = sorted[0]
+  const ctxGiven = candidates.some(c => c.context !== 'ukendt')
+  if (ctxGiven && p.approval !== 'godkendt' && p.context !== 'sortiment') {
+    const fitCand = candidates.find(c => c.context === 'sortiment')
+    const phrase = fitCand ? fitCand.keyword : (input.h1 || input.pageTitle)
+    const vols = withVol.map(c => `${c.keyword} (${c.volume})`).join(', ')
+    return {
+      conclusion: 'sidefokus',
+      headline: `Anbefalet sidefokus: «${phrase}»`,
+      reason: `Kandidaterne med søgevolumen (${vols}) er ikke dokumenteret i din forretningskontekst – vurdér dem manuelt og kontrollér SERP, før et af dem bliver primært søgeord. «${phrase}» matcher sortiment og formål${fitCand && fitCand.volume == null ? ', men har ingen registreret volumen i Ahrefs' : ''}.`,
+      candidates,
+    }
+  }
+  const info = [`volumen ${p.volume}`, p.kd != null ? `KD ${p.kd}` : '', p.intents ? `intent: ${p.intents}` : '', p.context === 'sortiment' ? 'sprogligt overlap med din forretningsbeskrivelse (ikke et verificeret match)' : 'ingen forretningskontekst angivet – bygger kun på volumen'].filter(Boolean).join(', ')
+  return { conclusion: 'primaer', headline: `Forslag til primært søgeord: «${p.keyword}»`, reason: `${info}. ${p.approval === 'godkendt' ? 'Godkendt af dig.' : 'Automatisk indikation – kræver SERP-verifikation og din godkendelse, før det påvirker anbefalinger og score.'}`, candidates }
+}
+
 function computePotential(
   gsc: GscRow[],
   text: string,
@@ -200,6 +303,9 @@ function computePotential(
 }
 
 export function analyzeSeo(input: SeoInput): SeoResult {
+  // Effektiv intent: din markering har forrang; ellers udledes den af sidens forretningskontekst
+  const intentFit: SeoInput['intentFit'] = input.intentFit || ''
+  const approval = input.keywordApproval ?? {}
   const plainBody = toPlainText(input.bodyContent)
   const text = fullText(input)
   const allKeywords = [input.targetKeyword, ...input.semanticKeywords].filter(Boolean)
@@ -220,7 +326,11 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   const targetCtrOk = !!targetGsc && targetGsc.clicks / targetGsc.impressions >= 0.8 * expectedCtr(targetGsc.position)
 
   // ── ON-PAGE KVALITET (100 point) ─────────────────────────────────────────
-  const intentDoubt = input.intentFit === 'partial' || input.intentFit === 'mismatch'
+  const intentDoubt = intentFit === 'partial' || intentFit === 'mismatch'
+  const rejectedTarget = approval[normKw(input.targetKeyword)] === 'afvist'
+  const approvedTarget = approval[normKw(input.targetKeyword)] === 'godkendt' || intentFit === 'match'
+  const kwActive = approvedTarget && !intentDoubt && !rejectedTarget
+  const kwReason = rejectedTarget ? 'søgeordet er afvist som SEO-mål' : intentDoubt ? 'intent matcher ikke fuldt' : 'søgeordet er ikke godkendt som SEO-mål'
   const sdActiveEarly = !!(input.structuredDataTypes && input.structuredDataTypes.length > 0)
   let score = 0
   let kwEarned = 0 // point der afhænger af target keyword (title 10, meta 8, H1 5, tekst 15 = 38)
@@ -261,8 +371,9 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   if (overOptimised) score -= 5
 
   // 6. Semantisk dækning (15)
-  const semanticCovered = input.semanticKeywords.filter(kw => countOccurrences(text, kw) >= 1).length
-  const semanticTotal = input.semanticKeywords.length || 1
+  const semList = input.semanticKeywords.filter(kw => approval[normKw(kw)] !== 'afvist')
+  const semanticCovered = semList.filter(kw => countOccurrences(text, kw) >= 1).length
+  const semanticTotal = semList.length || 1
   score += Math.round((semanticCovered / semanticTotal) * 15)
 
   // 7. Underoverskrifter (5)
@@ -287,16 +398,16 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   const contentPts = wordCount >= 800 ? 20 : wordCount >= 500 ? 14 : wordCount >= 300 ? 8 : wordCount >= 150 ? 4 : 0
   const h2Pts = h2Count >= 2 ? 5 : h2Count >= 1 ? 3 : 0
   const semPts = Math.round((semanticCovered / semanticTotal) * 15)
-  const ex = intentDoubt
+  const ex = !kwActive
   const scoreBreakdown: ScoreRow[] = [
-    { label: 'Title: indeholder keyword', earned: titleHasKeyword ? 10 : 0, max: 10, excluded: ex, note: ex ? 'Udeladt – intent matcher ikke fuldt' : titleHasKeyword ? 'Keyword fundet' : 'Keyword ikke fundet' },
+    { label: 'Title: indeholder keyword', earned: titleHasKeyword ? 10 : 0, max: 10, excluded: ex, note: ex ? `Udeladt – ${kwReason}` : titleHasKeyword ? 'Keyword fundet' : 'Keyword ikke fundet' },
     { label: 'Title: længde 30–65 tegn', earned: titleGoodLength ? 5 : 0, max: 5, note: `${input.pageTitle.length} tegn` },
-    { label: 'Meta: indeholder keyword', earned: metaHasKeyword ? 8 : 0, max: 8, excluded: ex, note: ex ? 'Udeladt – intent matcher ikke fuldt' : metaHasKeyword ? 'Keyword fundet' : 'Keyword ikke fundet' },
+    { label: 'Meta: indeholder keyword', earned: metaHasKeyword ? 8 : 0, max: 8, excluded: ex, note: ex ? `Udeladt – ${kwReason}` : metaHasKeyword ? 'Keyword fundet' : 'Keyword ikke fundet' },
     { label: 'Meta: længde 120–160 tegn', earned: metaGoodLength ? 7 : 0, max: 7, note: `${input.metaDescription.length} tegn` },
     { label: 'H1 til stede', earned: h1Present ? 5 : 0, max: 5, note: h1Present ? 'H1 fundet' : 'Ingen H1' },
-    { label: 'H1: indeholder keyword', earned: h1HasKeyword ? 5 : 0, max: 5, excluded: ex, note: ex ? 'Udeladt – intent matcher ikke fuldt' : h1HasKeyword ? 'Keyword fundet' : 'Keyword ikke fundet' },
+    { label: 'H1: indeholder keyword', earned: h1HasKeyword ? 5 : 0, max: 5, excluded: ex, note: ex ? `Udeladt – ${kwReason}` : h1HasKeyword ? 'Keyword fundet' : 'Keyword ikke fundet' },
     { label: 'Indholdsmængde (renset tekst)', earned: contentPts, max: 20, note: `${wordCount} ord` },
-    { label: 'Keyword i teksten', earned: densPts, max: 15, excluded: ex, note: ex ? 'Udeladt – intent matcher ikke fuldt' : `${targetCount} forekomst(er)` },
+    { label: 'Keyword i teksten', earned: densPts, max: 15, excluded: ex, note: ex ? `Udeladt – ${kwReason}` : `${targetCount} forekomst(er)` },
     { label: 'Semantiske keywords dækket', earned: semPts, max: 15, note: input.semanticKeywords.length === 0 ? 'Ingen angivet (0 point)' : `${semanticCovered} af ${input.semanticKeywords.length}` },
     { label: 'Underoverskrifter (H2)', earned: h2Pts, max: 5, note: `${h2Count} fundet` },
     { label: 'Interne links', earned: internalLinks >= 1 ? 5 : 0, max: 5, note: `${internalLinks} fundet` },
@@ -311,7 +422,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   const scoreFormula = `${raw} point af ${denom} mulige = ${percentage} %` + (ex ? ' (keyword-afhængige point udeladt)' : '')
 
   // ── SEO-POTENTIALE (kræver GSC) ───────────────────────────────────────────
-  const potential = computePotential(gsc, text, input.intentFit)
+  const potential = computePotential(gsc, text, intentFit)
 
   // ── KEYWORD TABLE (uden fast densitetsmål) ───────────────────────────────
   const keywordResults: KeywordResult[] = allKeywords.map(kw => {
@@ -321,7 +432,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
 
     let status: KeywordStatus
     let note: string
-    if (count === 0) { status = 'Mangler'; note = intentDoubt && isTarget ? 'Ikke fundet – indgår ikke i scoren (intent ikke match)' : 'Ikke fundet – tilføj hvis det passer til intentionen' }
+    if (count === 0) { status = 'Mangler'; note = !kwActive && isTarget ? `Ikke fundet – indgår ikke i scoren (${kwReason})` : 'Ikke fundet – tilføj hvis det passer til intentionen' }
     else if (isTarget && count === 1 && !inKeyPlace) { status = 'Optimer'; note = 'Kun nævnt én gang og ikke i title/H1' }
     else if (!isTarget && count === 0) { status = 'Mangler'; note = 'Ikke fundet' }
     else { status = 'God'; note = isTarget && overOptimised ? 'Nævnt meget ofte – tjek at det læses naturligt' : 'Dækket – ingen fast målværdi' }
@@ -345,17 +456,17 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   const sdActive = !!(input.structuredDataTypes && input.structuredDataTypes.length > 0)
 
   // Title
-  const keepTitle = (titleHasKeyword && titleGoodLength && targetRanksWell && targetCtrOk) || (intentDoubt && titleGoodLength)
+  const keepTitle = (titleHasKeyword && titleGoodLength && targetRanksWell && targetCtrOk) || (!kwActive && titleGoodLength)
   const recTitle: RecommendationItem = {
     id: 'title',
-    verdict: keepTitle ? 'behold' : !titleHasKeyword ? (input.intentFit === 'match' ? 'optimer' : 'manuel') : titleGoodLength ? 'behold' : 'optimer',
+    verdict: keepTitle ? 'behold' : !titleHasKeyword ? (kwActive ? 'optimer' : 'manuel') : titleGoodLength ? 'behold' : 'optimer',
     label: 'Title Tag',
     status: keepTitle || (titleHasKeyword && titleGoodLength) ? 'ok' : titleHasKeyword ? 'warn' : 'error',
     statusLabel: keepTitle ? 'Behold uændret' : titleHasKeyword && titleGoodLength ? 'Optimised' : titleHasKeyword ? '1 advarsel' : '1 fejl',
-    detail: keepTitle && intentDoubt && !titleHasKeyword
-      ? `Behold nuværende title (${input.pageTitle.length} tegn) – og overvej først, om "${input.targetKeyword}" overhovedet bør være sidens primære søgeord.` + why('Du har vurderet, at intentionen ikke (fuldt) matcher målgruppen. En title, der passer til sortiment og målgruppe, er vigtigere end at få et bestemt keyword med.')
+    detail: keepTitle && !kwActive && !titleHasKeyword
+      ? `Behold nuværende title (${input.pageTitle.length} tegn) – og overvej først, om "${input.targetKeyword}" overhovedet bør være sidens primære søgeord.` + why('Søgeordet er ikke godkendt som SEO-mål (eller intent matcher ikke fuldt). Godkend det i fanen Keywords, hvis det skal påvirke anbefalinger. En title, der passer til sortiment og målgruppe, er vigtigere end at få et bestemt keyword med.')
       : keepTitle
-      ? `Behold title uændret (${input.pageTitle.length} tegn).` + why(intentDoubt ? 'Du har vurderet, at intentionen kun delvist matcher – så er en præcis title bedre end at presse keywordet ind.' : `Den indeholder keywordet, har god længde, og siden rangerer allerede godt med fornuftig CTR. ${gscLine} En ændring risikerer at flytte placeringen.`)
+      ? `Behold title uændret (${input.pageTitle.length} tegn).` + why(!kwActive ? 'Søgeordet er ikke godkendt som SEO-mål – så er en præcis title bedre end at presse keywordet ind.' : `Den indeholder keywordet, har god længde, og siden rangerer allerede godt med fornuftig CTR. ${gscLine} En ændring risikerer at flytte placeringen.`)
       : titleHasKeyword
         ? titleGoodLength
           ? `Title tag er god (${input.pageTitle.length} tegn) og indeholder target keyword.` + why(`Title er det stærkeste on-page signal for keywordet.${gscLine ? ' ' + gscLine : ''}`)
@@ -366,7 +477,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   // H1
   const recH1: RecommendationItem = {
     id: 'h1',
-    verdict: !h1Present ? 'optimer' : /\s\|\s|®/.test(input.h1) ? 'optimer' : h1HasKeyword ? 'behold' : (input.intentFit === 'match' ? 'optimer' : 'manuel'),
+    verdict: !h1Present ? 'optimer' : /\s\|\s|®/.test(input.h1) ? 'optimer' : h1HasKeyword ? 'behold' : (kwActive ? 'optimer' : 'manuel'),
     label: 'H1',
     status: h1HasKeyword ? 'ok' : h1Present ? 'warn' : 'error',
     statusLabel: h1HasKeyword ? 'Optimised' : h1Present ? '1 advarsel' : '1 fejl',
@@ -416,15 +527,15 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   }
 
   // Meta
-  const keepMeta = (metaHasKeyword && metaGoodLength && targetRanksWell && targetCtrOk) || (intentDoubt && metaGoodLength)
+  const keepMeta = (metaHasKeyword && metaGoodLength && targetRanksWell && targetCtrOk) || (!kwActive && metaGoodLength)
   const recMeta: RecommendationItem = {
     id: 'meta',
-    verdict: keepMeta ? 'behold' : (metaHasKeyword && metaGoodLength) ? 'behold' : (!metaGoodLength ? 'optimer' : (input.intentFit === 'match' ? 'optimer' : 'manuel')),
+    verdict: keepMeta ? 'behold' : (metaHasKeyword && metaGoodLength) ? 'behold' : (!metaGoodLength ? 'optimer' : (kwActive ? 'optimer' : 'manuel')),
     label: 'Meta Description',
     status: keepMeta || (metaHasKeyword && metaGoodLength) ? 'ok' : 'warn',
     statusLabel: keepMeta ? 'Behold uændret' : metaHasKeyword && metaGoodLength ? 'Optimised' : '1 advarsel',
     detail: keepMeta
-      ? `Behold meta description uændret (${input.metaDescription.length} tegn).` + why(intentDoubt && !(targetRanksWell && targetCtrOk) ? 'Længden passer, og du har vurderet, at intentionen kun delvist matcher – så er en præcis beskrivelse bedre end at presse keywordet ind.' : `Keyword er med, længden passer, og CTR er rimelig for placeringen. ${gscLine}`)
+      ? `Behold meta description uændret (${input.metaDescription.length} tegn).` + why(!kwActive && !(targetRanksWell && targetCtrOk) ? 'Længden passer, og søgeordet er ikke godkendt som SEO-mål – så er en præcis beskrivelse bedre end at presse keywordet ind.' : `Keyword er med, længden passer, og CTR er rimelig for placeringen. ${gscLine}`)
       : metaHasKeyword
         ? metaGoodLength
           ? `Meta description er god (${input.metaDescription.length} tegn).` + why('Meta påvirker ikke placeringen direkte. Google vælger selv, hvilket snippet der vises, så en CTR-effekt kan ikke garanteres.')
@@ -458,14 +569,14 @@ export function analyzeSeo(input: SeoInput): SeoResult {
 
   const recommendations: RecommendationItem[] = [recTitle, recH1, recH2, recContent, recLinks, recMeta, recFaq, recSd]
 
-  if (input.intentFit) {
+  if (intentFit) {
     recommendations.push({
       id: 'intent',
-      verdict: input.intentFit === 'match' ? 'behold' : 'manuel',
+      verdict: intentFit === 'match' ? 'behold' : 'manuel',
       label: 'Søgeintention / B2B-match',
-      status: input.intentFit === 'match' ? 'ok' : input.intentFit === 'partial' ? 'warn' : 'error',
-      statusLabel: input.intentFit === 'match' ? 'Match' : input.intentFit === 'partial' ? 'Delvist' : 'Ikke match',
-      detail: input.intentFit === 'match'
+      status: intentFit === 'match' ? 'ok' : intentFit === 'partial' ? 'warn' : 'error',
+      statusLabel: intentFit === 'match' ? 'Match' : intentFit === 'partial' ? 'Delvist' : 'Ikke match',
+      detail: intentFit === 'match'
         ? 'Du har vurderet, at søgeintentionen passer til målgruppen.' + why('Når intentionen passer, giver forbedringer størst effekt.')
         : 'Du har vurderet, at intentionen kun delvist/ikke matcher målgruppen.' + why('Tekstoptimering kan ikke rette et intent-mismatch – overvej om siden er den rigtige til søgningen, før du bruger tid på den.'),
     })
@@ -517,7 +628,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
       num: 'Gap 02 · Intention',
       tag: '#4f7fff',
       title: 'Matcher siden det brugeren leder efter?',
-      description: input.intentFit === 'mismatch' || input.intentFit === 'partial'
+      description: intentFit === 'mismatch' || intentFit === 'partial'
         ? 'Du har markeret intentionen som delvist/ikke matchende. Afklar det først – ellers risikerer du at optimere en side til forkert målgruppe.'
         : 'Tjek de øverste resultater for søgningen: er det kategorisider, guides eller B2C-butikker? Siden skal ligne dem, der rangerer.',
       color: '#4f7fff',
@@ -554,9 +665,9 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   }
   if (!titleHasKeyword) {
     quickWins.push({
-      priority: input.intentFit === 'match' ? 'red' : 'yellow',
-      title: input.intentFit === 'match' ? 'Få keywordet ind i title' : 'Afklar om keywordet bør være primært',
-      detail: input.intentFit === 'match'
+      priority: kwActive ? 'red' : 'yellow',
+      title: kwActive ? 'Få keywordet ind i title' : 'Afklar om keywordet bør være primært',
+      detail: kwActive
         ? `Title mangler "${input.targetKeyword}" – det er det stærkeste on-page signal.`
         : `Title mangler "${input.targetKeyword}". Vurdér først søgeintention og sortimentsmatch (feltet i venstre side) – en præcis title er bedre end et forkert primært søgeord.`,
     })
@@ -606,6 +717,8 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     })
   }
 
+  const focus = computeFocus(input, text, intentFit)
+
   // ── SAMLET VURDERING ─────────────────────────────────────────────────────
   const verdict: string[] = []
   if (keepTitle && keepMeta) verdict.push('Behold den eksisterende title og meta description.')
@@ -615,7 +728,8 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   if (covered.length > 0) verdict.push(`Allerede dækket: ${covered.slice(0, 4).join(', ')}.`)
   if (missingKeywords.length > 0) verdict.push(`Ikke fundet på siden: ${missingKeywords.slice(0, 4).join(', ')} – tilføj kun, hvis det passer til sidens formål.`)
   if (gsc.length > 0 && potential.confidence === 'ingen') verdict.push('GSC-data er utilstrækkelige til at pege på nye muligheder.')
-  if (!input.intentFit) verdict.push('Vurdér søgeintention og B2B-match, før du ændrer title, H1 eller brødtekst.')
+  if (!kwActive) verdict.push(`Søgeordet «${input.targetKeyword}» påvirker hverken anbefalinger eller score (${kwReason}). Godkend det under Keywords → Søgeordsfokus, når SERP er verificeret.`)
+  if (focus.conclusion !== 'afventer') verdict.push(focus.headline + '.')
   if (verdict.length === 0) verdict.push('Ingen tydelige handlinger – siden ser ud til at passe til sit formål.')
 
   return {
@@ -642,5 +756,6 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     verdict,
     scoreBreakdown,
     scoreFormula,
+    focus,
   }
 }
