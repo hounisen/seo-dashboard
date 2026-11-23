@@ -42,11 +42,20 @@ export interface KeywordResult {
 
 export interface RecommendationItem {
   id: string
-  verdict: 'behold' | 'optimer' | 'manuel'
+  verdict: 'behold' | 'optimer' | 'manuel' | 'ikke-verificeret'
   label: string
-  status: 'ok' | 'warn' | 'error'
+  status: 'ok' | 'warn' | 'error' | 'neutral'
   statusLabel: string
   detail: string
+}
+
+export interface ScoreRow {
+  label: string
+  earned: number
+  max: number
+  note: string
+  excluded?: boolean
+  bonus?: boolean
 }
 
 export interface ContentGap {
@@ -80,6 +89,8 @@ export interface SeoResult {
   potentialConfidence: 'ingen' | 'lav' | 'ok'
   gscStats: { queries: number; impressions: number }
   verdict: string[]
+  scoreBreakdown: ScoreRow[]
+  scoreFormula: string
 }
 
 // ── Fleksibel keyword-matching ──────────────────────────────────────────────
@@ -210,6 +221,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
 
   // ── ON-PAGE KVALITET (100 point) ─────────────────────────────────────────
   const intentDoubt = input.intentFit === 'partial' || input.intentFit === 'mismatch'
+  const sdActiveEarly = !!(input.structuredDataTypes && input.structuredDataTypes.length > 0)
   let score = 0
   let kwEarned = 0 // point der afhænger af target keyword (title 10, meta 8, H1 5, tekst 15 = 38)
 
@@ -270,11 +282,33 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   // 9. Struktureret data (+5, når bekræftet)
   if (input.structuredDataTypes && input.structuredDataTypes.length > 0) score += 5
 
-  score = Math.max(0, score)
-  // Hvis intentionen ikke (fuldt) matcher, afgør relevans – ikke fraværet af keywordet – scoren:
-  // keyword-afhængige point (38) udelades af både tæller og nævner.
-  if (intentDoubt) score = ((score - kwEarned) / (100 - 38)) * 100
-  const percentage = Math.min(Math.round(score), 100)
+  // ── FORKLARBAR SCORE ─────────────────────────────────────────────────────
+  // Keyword-afhængige point (38) udelades, når intentionen ikke (fuldt) matcher: relevans afgør, ikke fraværet.
+  const contentPts = wordCount >= 800 ? 20 : wordCount >= 500 ? 14 : wordCount >= 300 ? 8 : wordCount >= 150 ? 4 : 0
+  const h2Pts = h2Count >= 2 ? 5 : h2Count >= 1 ? 3 : 0
+  const semPts = Math.round((semanticCovered / semanticTotal) * 15)
+  const ex = intentDoubt
+  const scoreBreakdown: ScoreRow[] = [
+    { label: 'Title: indeholder keyword', earned: titleHasKeyword ? 10 : 0, max: 10, excluded: ex, note: ex ? 'Udeladt – intent matcher ikke fuldt' : titleHasKeyword ? 'Keyword fundet' : 'Keyword ikke fundet' },
+    { label: 'Title: længde 30–65 tegn', earned: titleGoodLength ? 5 : 0, max: 5, note: `${input.pageTitle.length} tegn` },
+    { label: 'Meta: indeholder keyword', earned: metaHasKeyword ? 8 : 0, max: 8, excluded: ex, note: ex ? 'Udeladt – intent matcher ikke fuldt' : metaHasKeyword ? 'Keyword fundet' : 'Keyword ikke fundet' },
+    { label: 'Meta: længde 120–160 tegn', earned: metaGoodLength ? 7 : 0, max: 7, note: `${input.metaDescription.length} tegn` },
+    { label: 'H1 til stede', earned: h1Present ? 5 : 0, max: 5, note: h1Present ? 'H1 fundet' : 'Ingen H1' },
+    { label: 'H1: indeholder keyword', earned: h1HasKeyword ? 5 : 0, max: 5, excluded: ex, note: ex ? 'Udeladt – intent matcher ikke fuldt' : h1HasKeyword ? 'Keyword fundet' : 'Keyword ikke fundet' },
+    { label: 'Indholdsmængde (renset tekst)', earned: contentPts, max: 20, note: `${wordCount} ord` },
+    { label: 'Keyword i teksten', earned: densPts, max: 15, excluded: ex, note: ex ? 'Udeladt – intent matcher ikke fuldt' : `${targetCount} forekomst(er)` },
+    { label: 'Semantiske keywords dækket', earned: semPts, max: 15, note: input.semanticKeywords.length === 0 ? 'Ingen angivet (0 point)' : `${semanticCovered} af ${input.semanticKeywords.length}` },
+    { label: 'Underoverskrifter (H2)', earned: h2Pts, max: 5, note: `${h2Count} fundet` },
+    { label: 'Interne links', earned: internalLinks >= 1 ? 5 : 0, max: 5, note: `${internalLinks} fundet` },
+    { label: 'Struktureret data (bonus)', earned: sdActiveEarly ? 5 : 0, max: 5, bonus: true, note: sdActiveEarly ? 'Markeret af dig' : 'Ikke verificeret – tæller hverken for eller imod' },
+  ]
+  if (overOptimised) scoreBreakdown.push({ label: 'Keyword overbrugt (>3 % af ordene)', earned: ex ? 0 : -5, max: 0, excluded: ex, note: ex ? 'Udeladt' : 'Fradrag' })
+  const counted = scoreBreakdown.filter(r => !r.excluded)
+  const raw = counted.reduce((a, r) => a + r.earned, 0)
+  const denom = counted.filter(r => !r.bonus).reduce((a, r) => a + r.max, 0)
+  score = Math.max(0, raw)
+  const percentage = Math.min(Math.max(Math.round((raw / denom) * 100), 0), 100)
+  const scoreFormula = `${raw} point af ${denom} mulige = ${percentage} %` + (ex ? ' (keyword-afhængige point udeladt)' : '')
 
   // ── SEO-POTENTIALE (kræver GSC) ───────────────────────────────────────────
   const potential = computePotential(gsc, text, input.intentFit)
@@ -332,7 +366,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   // H1
   const recH1: RecommendationItem = {
     id: 'h1',
-    verdict: h1HasKeyword ? 'behold' : !h1Present ? 'optimer' : (input.intentFit === 'match' ? 'optimer' : 'manuel'),
+    verdict: !h1Present ? 'optimer' : /\s\|\s|®/.test(input.h1) ? 'optimer' : h1HasKeyword ? 'behold' : (input.intentFit === 'match' ? 'optimer' : 'manuel'),
     label: 'H1',
     status: h1HasKeyword ? 'ok' : h1Present ? 'warn' : 'error',
     statusLabel: h1HasKeyword ? 'Optimised' : h1Present ? '1 advarsel' : '1 fejl',
@@ -401,7 +435,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   // FAQ (indhold til brugeren – ikke længere SEO-tiltag via FAQPage rich results)
   const recFaq: RecommendationItem = {
     id: 'faq',
-    verdict: hasFaq ? 'behold' : 'manuel',
+    verdict: 'behold',
     label: 'FAQ Section',
     status: 'ok',
     statusLabel: hasFaq ? 'Fundet' : 'Valgfri',
@@ -413,7 +447,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   // Structured data (værktøjet undersøger ikke sidens markup – kun din markering)
   const recSd: RecommendationItem = {
     id: 'structured-data',
-    verdict: sdActive ? 'behold' : 'manuel',
+    verdict: sdActive ? 'behold' : 'ikke-verificeret',
     label: 'Structured Data',
     status: sdActive ? 'ok' : 'warn',
     statusLabel: sdActive ? `Aktiv: ${input.structuredDataTypes!.join(', ')}` : 'Ikke undersøgt',
@@ -435,6 +469,23 @@ export function analyzeSeo(input: SeoInput): SeoResult {
         ? 'Du har vurderet, at søgeintentionen passer til målgruppen.' + why('Når intentionen passer, giver forbedringer størst effekt.')
         : 'Du har vurderet, at intentionen kun delvist/ikke matcher målgruppen.' + why('Tekstoptimering kan ikke rette et intent-mismatch – overvej om siden er den rigtige til søgningen, før du bruger tid på den.'),
     })
+  }
+
+  // H1 med brandnavn/separator
+  if (h1Present && /\s\|\s|®/.test(input.h1)) {
+    recH1.detail += '\n<b>Bemærk:</b> H1 indeholder brandnavn eller separator. Overvej at lade H1 alene beskrive sidens emne.'
+  }
+
+  // Status og anbefaling må ikke modsige hinanden: den faglige beslutning (verdict) er primær.
+  const absent: Record<string, boolean> = {
+    title: !input.pageTitle, h1: !h1Present, links: internalLinks < 1,
+    meta: !input.metaDescription, subheadings: h2Count < 1, content: wordCount < 150,
+  }
+  const verdictLabel = { behold: 'Behold', optimer: 'Optimér', manuel: 'Manuel vurdering', 'ikke-verificeret': 'Ikke verificeret' } as const
+  for (const rec of recommendations) {
+    const v = rec.verdict
+    rec.status = v === 'behold' ? 'ok' : v === 'ikke-verificeret' ? 'neutral' : v === 'manuel' ? 'warn' : (absent[rec.id] ? 'error' : 'warn')
+    if (!(rec.id === 'structured-data' && sdActive) && rec.statusLabel !== 'Behold uændret') rec.statusLabel = verdictLabel[v]
   }
 
   // ── CONTENT GAPS ─────────────────────────────────────────────────────────
@@ -589,5 +640,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     potentialConfidence: potential.confidence,
     gscStats: { queries: potential.queries, impressions: potential.impressions },
     verdict,
+    scoreBreakdown,
+    scoreFormula,
   }
 }

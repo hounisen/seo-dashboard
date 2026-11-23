@@ -109,8 +109,9 @@ function ScoreRing({ pct }: { pct: number }) {
   )
 }
 
-function StatusPill({ status }: { status: 'ok' | 'warn' | 'error' }) {
+function StatusPill({ status }: { status: 'ok' | 'warn' | 'error' | 'neutral' }) {
   const map = {
+    neutral: { bg: 'bg-gray-100', text: 'text-gray-600', dot: 'bg-gray-400', label: 'Ikke verificeret' },
     ok:    { bg: 'bg-emerald-50', text: 'text-emerald-700', dot: 'bg-emerald-400', label: 'Optimised' },
     warn:  { bg: 'bg-amber-50',   text: 'text-amber-700',   dot: 'bg-amber-400',   label: 'Advarsel' },
     error: { bg: 'bg-red-50',     text: 'text-red-600',     dot: 'bg-red-400',     label: 'Fejl' },
@@ -1487,10 +1488,10 @@ export default function SeoDashboard() {
                           <div>
                             <div className="text-xs font-bold tracking-wide uppercase text-gray-400 mb-1.5">{rec.label}</div>
                             <div className="flex items-center gap-2 flex-wrap">
-                              <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${rec.verdict === 'behold' ? 'bg-emerald-100 text-emerald-700' : rec.verdict === 'optimer' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
-                                {rec.verdict === 'behold' ? 'BEHOLD' : rec.verdict === 'optimer' ? 'OPTIMÉR' : 'MANUEL VURDERING'}
+                              <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${rec.verdict === 'behold' ? 'bg-emerald-100 text-emerald-700' : rec.verdict === 'optimer' ? 'bg-blue-100 text-blue-700' : rec.verdict === 'ikke-verificeret' ? 'bg-gray-100 text-gray-600' : 'bg-amber-100 text-amber-700'}`}>
+                                {rec.verdict === 'behold' ? 'BEHOLD' : rec.verdict === 'optimer' ? 'OPTIMÉR' : rec.verdict === 'ikke-verificeret' ? 'IKKE VERIFICERET' : 'MANUEL VURDERING'}
                               </span>
-                              <StatusPill status={rec.status} />
+                              {rec.statusLabel.startsWith('Aktiv') && <span className="text-xs text-gray-500">{rec.statusLabel}</span>}
                             </div>
                           </div>
                           <span className="text-gray-300 text-lg font-light ml-2 flex-shrink-0">›</span>
@@ -1761,6 +1762,35 @@ export default function SeoDashboard() {
                   </div>
                 )}
 
+                </>)}
+                {dashTab === 'overblik' && (<>
+                <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                  <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-1">Sådan er scoren beregnet</p>
+                  <p className="text-xs text-gray-500 mb-4">{result.scoreFormula}</p>
+                  <div className="overflow-x-auto -mx-2">
+                    <table className="w-full text-sm min-w-[480px]">
+                      <thead>
+                        <tr className="border-b border-gray-100">
+                          {['Element', 'Point', 'Forklaring'].map(h => (
+                            <th key={h} className="text-left text-xs font-bold tracking-widest uppercase text-gray-400 pb-2 px-3">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {result.scoreBreakdown.map((r, i) => (
+                          <tr key={i} className={`border-b border-gray-50 ${r.excluded ? 'opacity-40' : ''}`}>
+                            <td className="py-2 px-3 text-gray-800">{r.label}</td>
+                            <td className={`py-2 px-3 tabular-nums font-semibold ${r.excluded ? 'text-gray-400' : r.earned < r.max && !r.bonus ? 'text-red-500' : 'text-emerald-600'}`}>
+                              {r.excluded ? '–' : `${r.earned}${r.max > 0 ? ` / ${r.max}` : ''}`}
+                            </td>
+                            <td className="py-2 px-3 text-xs text-gray-500">{r.note}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-3">Røde point er det, der trækker scoren ned. Ukendte forhold (fx structured data) tæller hverken for eller imod. Et element kan få BEHOLD, selvom det ikke giver fulde point.</p>
+                </div>
                 </>)}
                 {dashTab === 'overblik' && (<>
                 {/* Content gaps */}
