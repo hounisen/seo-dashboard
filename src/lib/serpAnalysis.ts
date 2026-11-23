@@ -32,6 +32,7 @@ export interface ClassifiedResult {
   basis: 'ahrefs' | 'heuristik'
   pageTypeRaw: string | null
   updateDate: string
+  b2c: boolean
 }
 
 export interface SerpAnalysis {
@@ -96,7 +97,7 @@ export function analyzeSerp(data: SerpData, pageType: PageTypeInput): SerpAnalys
   const organic = data.positions.filter(p => p.types.includes('organic') && p.url)
   const results: ClassifiedResult[] = organic.map(p => {
     const c = classifyOne(p)
-    return { position: p.position, title: p.title || '', url: p.url || '', kind: c.kind, basis: c.basis, pageTypeRaw: p.pageType, updateDate: p.updateDate }
+    return { position: p.position, title: p.title || '', url: p.url || '', kind: c.kind, basis: c.basis, pageTypeRaw: p.pageType, updateDate: p.updateDate, b2c: /\bprivate?\b|til hjemmet|børn|forbruger|\bhjem\b/i.test(p.title || '') }
   })
   const n = results.length
   const shares: Partial<Record<PageKind, number>> = {}
@@ -104,7 +105,7 @@ export function analyzeSerp(data: SerpData, pageType: PageTypeInput): SerpAnalys
   const known = results.filter(r => r.kind !== 'ukendt')
   const dominant = (Object.entries(shares).filter(([k]) => k !== 'ukendt').sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))[0]?.[0] as PageKind) || 'ukendt'
   const heuristicShare = n > 0 ? results.filter(r => r.basis === 'heuristik').length / n : 1
-  const b2cSignals = results.filter(r => /\bprivate?\b|til hjemmet|børn|forbruger|\bhjem\b/i.test(r.title)).length
+  const b2cSignals = results.filter(r => r.b2c).length
   const uncertain = n < 5 || known.length < Math.ceil(n * 0.6) || heuristicShare > 0.5
 
   const intent =

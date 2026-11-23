@@ -8,6 +8,7 @@ Regler:
 - Svar KUN med gyldig JSON uden markdown.
 - Foreslå højst 3 væsentlige forbedringer, prioriteret efter dokumenteret effekt. Hvis eksisterende indhold fungerer, svar behold=true med kort begrundelse og ingen forslag.
 - Opfind ALDRIG produktegenskaber, certificeringer, priser, leveringsløfter eller sortiment, som ikke fremgår af den givne forretningskontekst eller sidens eksisterende tekst.
+- Input indeholder analysisMode ('ny' = SEO-planlægning, 'eksisterende' = optimering) og keywordAssessments med B2B-vurdering og rolle pr. søgeord. Brug kun søgeord med role 'primaer' eller 'sekundaer' i title/meta/H1/brødtekst. Søgeord med role 'fravaelg' eller 'anden-side' må IKKE indarbejdes på siden; nævn i stedet i beholdReason eller reason, at de bør målrettes en anden side. Basis 'estimat' er ikke verificeret: marker forslag som 'hypotese'. Ved analysisMode 'ny' må GSC ikke bruges som dokumentation for sidens performance.
 - Foreslå kun søgeord/emner, der matcher sidens formål, målgruppe og faktiske sortiment.
 - Hvert forslag skal have: element (title|meta|h1|h2|intro|body|link), current (eksisterende tekst, tom hvis nyt), proposed (færdigformuleret tekst), reason (kort, konkret), evidence (dokumenteret|hypotese|redaktionel), source (hvilke data understøtter det: fx "SERP", "GSC", "Ahrefs", "forretningskontekst", "sidens tekst"), placement (kun for h2/intro/body/link: præcis hvor, fx "efter overskriften 'X'" eller "som sidste afsnit").
 - "dokumenteret" kræver konkrete data i inputtet. Ellers brug "hypotese" eller "redaktionel".

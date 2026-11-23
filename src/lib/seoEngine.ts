@@ -26,6 +26,8 @@ export interface SeoInput {
   pageType?: PageTypeInput
   keywordStatus?: Record<string, 'kandidat' | 'godkendt' | 'fravalgt'>
   serp?: Record<string, SerpData>
+  analysisMode?: 'ny' | 'eksisterende'
+  b2bOverride?: Record<string, 'match' | 'delvist' | 'ikke'>
   kwData?: { keyword: string; volume: number; difficulty: number | null; intents: string }[]
 }
 
@@ -63,6 +65,18 @@ export interface RecommendationItem {
   action: string
 }
 
+export type CriterionVerdict = 'match' | 'delvist' | 'ikke' | 'ikke-vurderet'
+export interface B2BCriterion { key: 'malgruppe' | 'sortiment' | 'intention' | 'landingsside' | 'konvertering'; label: string; verdict: CriterionVerdict; note: string }
+export interface B2BAssessment {
+  overall: 'MATCH' | 'DELVIST MATCH' | 'IKKE MATCH' | 'IKKE VURDERET'
+  basis: 'serp' | 'serp-usikker' | 'estimat'
+  basisLabel: string
+  criteria: B2BCriterion[]
+  summary: string
+  overridden: boolean
+}
+export type KwRole = 'primaer' | 'sekundaer' | 'fravaelg' | 'anden-side' | 'afventer'
+
 export interface FocusCandidate {
   keyword: string
   volume: number | null
@@ -72,6 +86,9 @@ export interface FocusCandidate {
   status: KwStatus
   suggested: KwStatus
   rationale: string
+  b2b: B2BAssessment
+  role: KwRole
+  roleReason: string
   serp: { verdict: SerpAnalysis['verdict']; uncertain: boolean; summary: string } | null
   onPage: boolean
 }
@@ -132,6 +149,7 @@ export interface SeoResult {
   coverage: { items: CoverageItem[]; done: number; total: number }
   serpAnalyses: Record<string, SerpAnalysis>
   focus: FocusResult
+  analysisMode: 'ny' | 'eksisterende'
 }
 
 // ── Fleksibel keyword-matching ──────────────────────────────────────────────
@@ -293,6 +311,94 @@ function serpSummary(a: SerpAnalysis): string {
   return a.organicCount === 0 ? 'Ingen SERP-data' : `Top ${a.organicCount}: ${parts.join(', ')}`
 }
 
+// ── B2B-vurdering pr. søgeord (fem selvstændige kriterier) ───────────────────────────────────
+function assessB2B(
+  kw: string, intents: string, a: SerpAnalysis | null, pageType: PageTypeInput,
+  ctx: { fit: string; limit: string }, override?: 'match' | 'delvist' | 'ikke',
+): B2BAssessment {
+  const n = a?.organicCount ?? 0
+  const serpOk = !!a && n >= 5
+  const basis: B2BAssessment['basis'] = serpOk ? (a!.uncertain ? 'serp-usikker' : 'serp') : 'estimat'
+  const basisLabel = basis === 'serp' ? 'SERP-understøttet' : basis === 'serp-usikker' ? 'SERP-understøttet, men usikker klassifikation' : 'Foreløbigt estimat – ikke verificeret mod SERP'
+  const NV = 'ikke-vurderet' as const
+  const crit: B2BCriterion[] = []
+  const il = (intents || '').toLowerCase()
+
+  // 1. Målgruppe
+  let aud: B2BCriterion
+  if (serpOk) {
+    const share = a!.b2cSignals / n
+    aud = { key: 'malgruppe', label: 'Målgruppe', verdict: share >= 0.4 ? 'ikke' : a!.b2cSignals > 0 ? 'delvist' : 'match',
+      note: a!.b2cSignals === 0 ? 'Ingen resultater i top 10 har forbrugersignaler i titlen.' : `${a!.b2cSignals} af ${n} resultater har forbruger-/private-signaler i titlen.` }
+  } else aud = { key: 'malgruppe', label: 'Målgruppe', verdict: NV, note: 'Kræver SERP (resultaternes titler og sidetyper).' }
+  crit.push(aud)
+
+  // 2. Sortimentsmatch – ordoverlap alene kan højst give DELVIST; MATCH kræver SERP-støtte
+  const ws = sigWords(kw)
+  const hits = (t: string) => ws.length ? ws.filter(w => wordHit(t, w)).length / ws.length : 0
+  const fitShare = hits(ctx.fit), limShare = hits(ctx.limit)
+  let sor: B2BCriterion
+  if (!ctx.fit.trim() && !ctx.limit.trim()) sor = { key: 'sortiment', label: 'Sortimentsmatch', verdict: NV, note: 'Ingen forretningskontekst angivet.' }
+  else if (ctx.limit.trim() && limShare >= 0.5) sor = { key: 'sortiment', label: 'Sortimentsmatch', verdict: 'delvist', note: 'Ordene findes i din afgrænsning – kan betyde, at Hounisen ikke leverer det. Vurdér selv.' }
+  else if (fitShare >= 0.67) sor = { key: 'sortiment', label: 'Sortimentsmatch', verdict: serpOk && a!.compatibleShare !== null && a!.compatibleShare >= 0.5 ? 'match' : 'delvist',
+    note: serpOk && a!.compatibleShare !== null && a!.compatibleShare >= 0.5 ? 'Ordoverlap med sortimentet, og SERP viser sidetyper, som din side kan matche. Ordoverlap alene er ikke bevis for, at produkterne kan leveres.' : 'Ordoverlap med forretningsbeskrivelsen er kun en indikation og er ikke bevis for, at produkterne kan leveres.' }
+  else if (fitShare > 0) sor = { key: 'sortiment', label: 'Sortimentsmatch', verdict: 'delvist', note: 'Kun delvist ordoverlap med forretningsbeskrivelsen – ikke alt i søgningen er nævnt som sortiment.' }
+  else sor = { key: 'sortiment', label: 'Sortimentsmatch', verdict: NV, note: 'Søgningen er ikke nævnt i forretningskonteksten – kan ikke afgøres automatisk.' }
+  crit.push(sor)
+
+  // 3. Søgeintention
+  let int: B2BCriterion
+  if (serpOk && a!.dominant !== 'ukendt') {
+    const dom = a!.shares[a!.dominant] ?? 0
+    const informative = a!.dominant === 'artikel'
+    let v: CriterionVerdict
+    if (dom < 0.5) v = 'delvist'
+    else if (informative) v = pageType === 'artikel' ? 'match' : pageType === '' ? NV : 'ikke'
+    else v = pageType === 'artikel' ? 'ikke' : 'match'
+    int = { key: 'intention', label: 'Søgeintention', verdict: v, note: `${a!.probableIntent} (${Math.round(dom * 100)} % ${KIND_LABEL[a!.dominant].toLowerCase()}).` }
+  } else if (/commercial|transactional/.test(il)) int = { key: 'intention', label: 'Søgeintention', verdict: 'delvist', note: `Foreløbigt: Ahrefs angiver «${intents}». Ikke verificeret mod SERP.` }
+  else if (/informational/.test(il)) int = { key: 'intention', label: 'Søgeintention', verdict: 'delvist', note: `Foreløbigt: Ahrefs angiver «${intents}» (informativ). Ikke verificeret mod SERP.` }
+  else int = { key: 'intention', label: 'Søgeintention', verdict: NV, note: 'Ingen SERP- eller intent-data.' }
+  crit.push(int)
+
+  // 4. Landingssidematch
+  let lan: B2BCriterion
+  if (serpOk && pageType !== '' && a!.compatibleShare !== null) {
+    const s = a!.compatibleShare
+    lan = { key: 'landingsside', label: 'Landingssidematch', verdict: s >= 0.5 ? 'match' : s >= 0.3 ? 'delvist' : 'ikke',
+      note: `${Math.round(s * 100)} % af resultaterne har samme sidetype som din side (${pageType}).${s < 0.3 ? ' Søgningen passer sandsynligvis bedre til en anden side, fx en mere specifik kategori eller produktside.' : ''}` }
+  } else lan = { key: 'landingsside', label: 'Landingssidematch', verdict: NV, note: pageType === '' ? 'Angiv sidetype for at vurdere match.' : 'Kræver SERP.' }
+  crit.push(lan)
+
+  // 5. Konverteringsrelevans – afledt af de øvrige, aldrig gættet
+  const dep = [aud, sor, int]
+  let con: B2BCriterion
+  if (dep.some(c => c.verdict === 'ikke')) con = { key: 'konvertering', label: 'Konverteringsrelevans', verdict: 'ikke', note: 'Mindst ét grundkriterium (målgruppe, sortiment, intention) er ikke match.' }
+  else if (dep.every(c => c.verdict === 'match')) con = { key: 'konvertering', label: 'Konverteringsrelevans', verdict: 'match', note: 'Målgruppe, sortiment og intention matcher. Sandsynlig, men ikke garanteret, B2B-trafik.' }
+  else if (dep.every(c => c.verdict !== NV)) con = { key: 'konvertering', label: 'Konverteringsrelevans', verdict: 'delvist', note: 'Grundkriterierne matcher kun delvist.' }
+  else con = { key: 'konvertering', label: 'Konverteringsrelevans', verdict: NV, note: 'Mangler grundlag (målgruppe, sortiment eller intention er ikke vurderet).' }
+  crit.push(con)
+
+  const assessed = crit.filter(c => c.verdict !== NV)
+  let overall: B2BAssessment['overall']
+  if (assessed.length < 3) overall = 'IKKE VURDERET'
+  else if (aud.verdict === 'ikke' || sor.verdict === 'ikke' || int.verdict === 'ikke') overall = 'IKKE MATCH'
+  else if (assessed.length >= 4 && assessed.every(c => c.verdict === 'match') && sor.verdict === 'match' && basis === 'serp') overall = 'MATCH'
+  else overall = 'DELVIST MATCH'
+  let overridden = false
+  if (override) { overridden = true; overall = override === 'match' ? 'MATCH' : override === 'delvist' ? 'DELVIST MATCH' : 'IKKE MATCH' }
+
+  const missing = crit.filter(c => c.verdict === NV).map(c => c.label.toLowerCase())
+  const summary = overridden ? 'Vurdering ændret manuelt af dig.'
+    : overall === 'IKKE VURDERET' ? `For få kriterier kan vurderes (${assessed.length} af 5). ${basis === 'estimat' ? 'Analysér SERP for at kvalificere vurderingen.' : ''}`
+    : `${basis === 'estimat' ? 'Foreløbigt estimat. ' : ''}${assessed.length} af 5 kriterier vurderet${missing.length ? ` (mangler: ${missing.join(', ')})` : ''}.`
+  return { overall, basis, basisLabel, criteria: crit, summary, overridden }
+}
+
+function matchScore(b: B2BAssessment): number {
+  return b.criteria.reduce((s, c) => s + (c.verdict === 'match' ? 2 : c.verdict === 'delvist' ? 1 : 0), 0)
+}
+
 function computeFocus(
   input: SeoInput,
   text: string,
@@ -302,6 +408,7 @@ function computeFocus(
   const names = Array.from(new Set([input.targetKeyword, ...input.semanticKeywords].filter(Boolean)))
   const data = input.kwData ?? []
   const statusMap = input.keywordStatus ?? {}
+  const pageType: PageTypeInput = input.pageType ?? ''
 
   const candidates: FocusCandidate[] = names.map(k => {
     const d = data.find(x => normKw(x.keyword) === normKw(k))
@@ -309,53 +416,67 @@ function computeFocus(
     const status: KwStatus = statusMap[normKw(k)] ?? 'afventer'
     const a = analyses[normKw(k)] ?? null
     const volume = d ? d.volume : null
-    let suggested: KwStatus = 'afventer'
-    const why: string[] = []
-    if (volume != null) why.push(`volumen ${volume}${d && d.difficulty != null ? `, KD ${d.difficulty}` : ''}`)
-    else why.push('ingen registreret volumen i de indlæste Ahrefs-data')
-    if (d && d.intents) why.push(`Ahrefs-intent: ${d.intents}`)
-    if (context === 'sortiment') why.push('sprogligt overlap med forretningsbeskrivelsen (kun indikation)')
-    if (context === 'afgrænset') why.push('sprogligt overlap med afgrænsningen (kun indikation – vurdér manuelt)')
-    if (a) {
-      why.push(`SERP: ${serpSummary(a)}${a.uncertain ? ' (usikkert)' : ''}`)
-      if (a.verdict === 'fravaelg') { suggested = 'fravalgt'; why.push('SERP viser en anden sidetype end din side') }
-      else if ((a.verdict === 'primaer' || a.verdict === 'sekundaer') && (volume ?? 0) > 0) { suggested = 'kandidat' }
-    } else if ((volume ?? 0) > 0) {
-      why.push('SERP er ikke analyseret endnu')
-    } else {
-      why.push('kan beskrive sidens formål, men er ikke automatisk et primært søgeord')
-    }
-    if (k === input.targetKeyword && input.intentFit === 'mismatch') suggested = 'fravalgt'
+    const b2b = assessB2B(k, d ? d.intents : '', a, pageType, ctx, input.b2bOverride?.[normKw(k)])
     return {
-      keyword: k, volume, kd: d ? d.difficulty : null, intents: d ? d.intents : '', context, status, suggested,
-      rationale: why.join('. '),
+      keyword: k, volume, kd: d ? d.difficulty : null, intents: d ? d.intents : '', context, status,
+      suggested: 'afventer' as KwStatus, rationale: '', role: 'afventer' as KwRole, roleReason: '',
       serp: a ? { verdict: a.verdict, uncertain: a.uncertain, summary: serpSummary(a) } : null,
-      onPage: containsKeyword(text, k),
+      b2b, onPage: containsKeyword(text, k),
     }
   })
+
+  // Roller. Rangering sker på B2B-match og SERP-match – aldrig på volumen alene.
+  const sevenSerp = (c: FocusCandidate) => c.b2b.basis !== 'estimat'
+  for (const c of candidates) {
+    const o = c.b2b.overall
+    const land = c.b2b.criteria.find(x => x.key === 'landingsside')!.verdict
+    if (c.status === 'fravalgt') { c.role = 'fravaelg'; c.roleReason = 'Fravalgt af dig.' }
+    else if (o === 'IKKE VURDERET') { c.role = 'afventer'; c.roleReason = 'For lidt grundlag til en anbefaling' + (sevenSerp(c) ? '.' : ' – analysér SERP.') }
+    else if (o === 'IKKE MATCH') { c.role = 'fravaelg'; c.roleReason = c.b2b.overridden ? 'Du har vurderet søgeordet som ikke match.' : 'Mindst ét grundkriterium (målgruppe, sortiment eller intention) er ikke match.' }
+    else if (land === 'ikke') { c.role = 'anden-side'; c.roleReason = 'Relevant søgning, men sidetypen i SERP passer ikke til denne side. Udvid ikke denne side – vurdér en mere specifik kategori/produktside eller et internt link.' }
+    else if (!sevenSerp(c)) { c.role = 'afventer'; c.roleReason = 'Foreløbigt estimat – analysér SERP, før søgeordet kan anbefales.' }
+    else { c.role = 'sekundaer'; c.roleReason = `${o} ${c.b2b.basis === 'serp' ? 'understøttet af SERP' : 'med usikker SERP-klassifikation'}.` }
+  }
+  const pool = candidates.filter(c => c.role === 'sekundaer' && c.b2b.basis === 'serp' && ((c.volume ?? 0) > 0 || c.status === 'godkendt'))
+  pool.sort((x, y) => matchScore(y.b2b) - matchScore(x.b2b) || (statusMap[normKw(y.keyword)] === 'godkendt' ? 1 : 0) - (statusMap[normKw(x.keyword)] === 'godkendt' ? 1 : 0) || (y.volume ?? 0) - (x.volume ?? 0))
+  const best = pool[0]
+  if (best) { best.role = 'primaer'; best.roleReason = `Bedste B2B- og SERP-match blandt kandidaterne (${best.b2b.overall}). Rangeret på match, ikke på volumen alene.${best.b2b.overall !== 'MATCH' ? ' Kun delvist match – godkend først efter din egen vurdering.' : ''}` }
+
+  for (const c of candidates) {
+    const why: string[] = []
+    if (c.volume != null) why.push(`volumen ${c.volume}${c.kd != null ? `, KD ${c.kd}` : ''}`); else why.push('ingen registreret volumen i de indlæste Ahrefs-data')
+    if (c.intents) why.push(`Ahrefs-intent: ${c.intents}`)
+    if (c.serp) why.push(`SERP: ${c.serp.summary}${c.serp.uncertain ? ' (usikkert)' : ''}`)
+    why.push(c.roleReason)
+    c.rationale = why.join('. ')
+    c.suggested = c.role === 'primaer' || c.role === 'sekundaer' ? 'kandidat' : c.role === 'fravaelg' || c.role === 'anden-side' ? 'fravalgt' : 'afventer'
+    if (c.keyword === input.targetKeyword && input.intentFit === 'mismatch' && c.suggested !== 'fravalgt') { c.suggested = 'fravalgt'; c.rationale += '. Du har selv vurderet intention som ikke match' }
+  }
 
   const approved = candidates.filter(c => c.status === 'godkendt')
   if (approved.length > 0) {
     return { conclusion: 'godkendt', headline: `Godkendt SEO-fokus: ${approved.map(c => `«${c.keyword}»`).join(', ')}`, reason: 'Du har godkendt søgeordet som SEO-mål. Søgeordsrelaterede kontroller er aktive.', candidates }
   }
+  if (best) {
+    const sec = candidates.filter(c => c.role === 'sekundaer').map(c => `«${c.keyword}»`)
+    const other = candidates.filter(c => c.role === 'anden-side').map(c => `«${c.keyword}»`)
+    const drop = candidates.filter(c => c.role === 'fravaelg').map(c => `«${c.keyword}»`)
+    const parts = [`${best.roleReason}`]
+    if (sec.length) parts.push(`Sekundære: ${sec.join(', ')}.`)
+    if (other.length) parts.push(`Bedre til en anden side: ${other.join(', ')}.`)
+    if (drop.length) parts.push(`Anbefales fravalgt: ${drop.join(', ')}.`)
+    parts.push('Intet er godkendt – status ændres kun af dig.')
+    return { conclusion: 'primaer', headline: `Anbefalet primær kandidat: «${best.keyword}» (${best.b2b.overall})`, reason: parts.join(' '), candidates }
+  }
   if (data.length === 0 && Object.keys(analyses).length === 0) {
     return { conclusion: 'afventer', headline: 'Afventer søgedata', reason: 'Upload en Ahrefs keyword-oversigt og/eller analysér SERP, før der foreslås et primært søgeord. Intet søgeord er valgt.', candidates }
   }
-  const suggestable = candidates.filter(c => c.suggested === 'kandidat' && c.status !== 'fravalgt')
-  if (suggestable.length > 0) {
-    const sum = suggestable.reduce((a, c) => a + (c.volume ?? 0), 0)
-    const best = [...suggestable].sort((a, b) => (b.volume ?? 0) - (a.volume ?? 0))[0]
-    if (suggestable.length >= 3 && (best.volume ?? 0) / Math.max(sum, 1) < 0.5) {
-      return { conclusion: 'intet-entydigt', headline: 'Intet entydigt primært søgeord', reason: 'Efterspørgslen er fordelt på flere mindre søgeord med SERP, der passer til siden. Overvej at godkende dem som en gruppe.', candidates }
-    }
-    return { conclusion: 'primaer', headline: `Forslag til primært søgeord: «${best.keyword}»`, reason: `${best.rationale}. Kræver din godkendelse – status ændres ikke automatisk.`, candidates }
+  const phrase = input.h1 || input.pageTitle
+  const withVol = candidates.filter(c => (c.volume ?? 0) > 0 && c.role !== 'fravaelg')
+  if (withVol.length === 0 || candidates.some(c => c.role === 'sekundaer')) {
+    return { conclusion: 'sidefokus', headline: `Anbefalet sidefokus: «${phrase}»`, reason: 'Ingen kandidat kan anbefales som primært SEO-søgeord ud fra B2B- og SERP-vurderingen. Sidens formulering kan stadig beskrive formålet. Manglende volumen i Ahrefs betyder ikke, at ingen søger.', candidates }
   }
-  const withVol = candidates.filter(c => (c.volume ?? 0) > 0 && c.status !== 'fravalgt')
-  if (withVol.length === 0) {
-    const phrase = input.h1 || input.pageTitle
-    return { conclusion: 'sidefokus', headline: `Anbefalet sidefokus: «${phrase}»`, reason: 'Ingen kandidater har registreret volumen. Formuleringen kan beskrive sidens formål, men er ikke automatisk et primært SEO-søgeord. Manglende volumen i Ahrefs betyder ikke, at ingen søger.', candidates }
-  }
-  return { conclusion: 'afventer', headline: 'Kandidater afventer SERP-verifikation', reason: `${withVol.map(c => `«${c.keyword}» (${c.volume})`).join(', ')} har volumen, men ingen er verificeret mod SERP. Høj volumen alene vælger ikke et primært søgeord – klik "Analysér SERP".`, candidates }
+  return { conclusion: 'afventer', headline: 'Kandidater afventer SERP-verifikation', reason: `${withVol.map(c => `«${c.keyword}» (${c.volume})`).join(', ')} har volumen, men er ikke SERP-verificeret. Høj volumen alene vælger ikke et primært søgeord – klik "Analysér SERP".`, candidates }
 }
 
 // ── Hjælpere til anbefalinger ────────────────────────────────────────────────────────────────
@@ -391,6 +512,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   const pageTextForConsistency = (input.h1 + ' ' + plainBody).toLowerCase()
   const wordCount = input.wordCount ?? plainBody.split(/\s+/).filter(Boolean).length
   const pageType: PageTypeInput = input.pageType ?? ''
+  const isNew = input.analysisMode === 'ny'
   const isProduct = pageType === 'produkt'
   const statusMap = input.keywordStatus ?? {}
   const statusOf = (k: string): KwStatus => statusMap[normKw(k)] ?? 'afventer'
@@ -402,6 +524,8 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   // SERP-analyser pr. søgeord
   const serpAnalyses: Record<string, SerpAnalysis> = {}
   for (const [k, d] of Object.entries(input.serp ?? {})) serpAnalyses[k] = analyzeSerp(d, pageType)
+
+  const focus = computeFocus(input, text, serpAnalyses)
 
   // ── Godkendt SEO-fokus ──────────────────────────────────────────────────
   const targetApproved = statusOf(input.targetKeyword) === 'godkendt'
@@ -433,7 +557,9 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   const metaConsistent = metaCons.total > 0 && metaCons.share >= 0.5
 
   // GSC-evidens for target (kun brugt som dokumentation, aldrig som mål i sig selv)
-  const gsc = input.gsc ?? []
+  // Ny side: GSC på domæneniveau er kun inspiration – aldrig dokumentation for sidens performance
+  const gscAll = input.gsc ?? []
+  const gsc = isNew ? [] : gscAll
   const targetGsc = gsc.filter(r => r.impressions > 0 && countOccurrences(r.keyword, input.targetKeyword) > 0).sort((a, b) => b.impressions - a.impressions)[0]
   const gscGood = !!targetGsc && targetGsc.position <= 5 && targetGsc.clicks / targetGsc.impressions >= 0.8 * expectedCtr(targetGsc.position)
   const gscLine = targetGsc ? ` GSC: «${targetGsc.keyword}» ligger på position ${targetGsc.position.toFixed(1)} med ${targetGsc.impressions.toLocaleString()} visninger og ${targetGsc.clicks.toLocaleString()} klik.` : ''
@@ -522,7 +648,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
       recs.push(rec('focus', 'Godkendt søgeord', 'behold', 'ok', 'Behold', `«${input.targetKeyword}» findes ${targetCount} gang(e) på siden.`, 'Godkendt af dig; flexibelt tekstmatch.', 'Søgeordet er dækket. Der er ingen fast målværdi for antal forekomster.', 'Ingen handling.'))
     }
   } else {
-    recs.push(rec('focus', 'SEO-søgeord', 'ikke-verificeret', 'neutral', 'Ikke verificeret', `Intet SEO-søgeord er godkendt (analyseret: «${input.targetKeyword}»).`, 'Søgeordsstatus er AFVENTER/KANDIDAT/FRAVALGT.', 'Søgeordsrelaterede kontroller er derfor ikke aktive og indgår ikke i scoren.', 'Vurdér kandidaterne under Keywords → Søgeordsfokus (SERP, volumen, forretningsmatch) og godkend ét, når du har verificeret det.'))
+    recs.push(rec('focus', 'SEO-søgeord', 'ikke-verificeret', 'neutral', 'Ikke verificeret', `Intet SEO-søgeord er godkendt (analyseret: «${input.targetKeyword}»).`, 'Søgeordsstatus er AFVENTER/KANDIDAT/FRAVALGT.', 'Søgeordsrelaterede kontroller er derfor ikke aktive og indgår ikke i scoren.', `${focus.headline}. Vurdér kandidaterne under Keywords → Søgeordsfokus (B2B-vurdering, SERP, volumen), og godkend først, når du har verificeret dem.`))
   }
 
   if (intentFit) {
@@ -577,10 +703,10 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   const relevanceFormula = relevanceScore === null ? 'SEO-relevans: ikke beregnet – ingen godkendt søgeord' : `SEO-relevans: ${sum(relRows)} point af ${relDenom} mulige = ${relevanceScore} % (kun for godkendte søgeord)`
 
   // 3) Potentiale (GSC)
-  const potential = computePotential(gsc, text, intentFit, input.gscMeta, input.url)
+  const potential = isNew
+    ? { score: null as number | null, notes: ['Ny side: potentiale beregnes ikke ud fra GSC. Manglende URL-historik er ikke et negativt signal.'], confidence: 'ingen' as 'ingen' | 'lav' | 'ok', queries: 0, impressions: 0 }
+    : computePotential(gsc, text, intentFit, input.gscMeta, input.url)
 
-  // Fokus
-  const focus = computeFocus(input, text, serpAnalyses)
 
   // ── Søgeords-tabel ──────────────────────────────────────────────────────
   const allKeywords = [input.targetKeyword, ...input.semanticKeywords].filter(Boolean)
@@ -588,7 +714,9 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     const count = countOccurrences(text, kw)
     const st = statusOf(kw)
     const stNote = st === 'godkendt' ? 'Godkendt' : st === 'fravalgt' ? 'Fravalgt – påvirker ikke score' : st === 'kandidat' ? 'Kandidat – påvirker ikke score' : 'Afventer – påvirker ikke score'
-    return { keyword: kw, status: count === 0 ? 'Mangler' : 'God', currentCount: count, recommendedMin: 1, recommendedMax: 0, note: `${count === 0 ? 'Ikke fundet' : 'Fundet'} · ${stNote}` }
+    const cand = focus.candidates.find(c => normKw(c.keyword) === normKw(kw))
+    const roleNote = cand && (cand.role === 'anden-side' || cand.role === 'fravaelg') ? ' · bør ikke tilføjes denne side' : ''
+    return { keyword: kw, status: count === 0 ? 'Mangler' : 'God', currentCount: count, recommendedMin: 1, recommendedMax: 0, note: `${count === 0 ? 'Ikke fundet' : 'Fundet'} · ${stNote}${roleNote}` }
   })
   const keywordsFound = keywordResults.filter(k => k.status === 'God').length
   const keywordsMissing = keywordResults.filter(k => k.status === 'Mangler').length
@@ -607,7 +735,8 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     { label: 'Søgeord godkendt', done: kwActive, note: kwActive ? input.targetKeyword : 'Intet godkendt søgeord' },
     { label: 'Ahrefs søgedata indlæst', done: (input.kwData ?? []).length > 0, note: (input.kwData ?? []).length ? `${(input.kwData ?? []).length} søgeord` : 'Ikke indlæst' },
     { label: 'SERP verificeret', done: approvedSerp || (!!targetSerp && targetSerp.organicCount >= 5), note: targetSerp ? `${targetSerp.organicCount} resultater (${targetSerp.dataDate ? targetSerp.dataDate.slice(0, 10) : 'dato ukendt'})` : 'Ikke analyseret' },
-    { label: 'GSC-data tilstrækkelige og tilknyttet URL/periode', done: gscVerified, note: gsc.length === 0 ? 'Ikke indlæst' : gscVerified ? 'Tilstrækkelige' : 'Utilstrækkelige eller URL/periode mangler' },
+    ...(isNew ? [] : [{ label: 'GSC-data tilstrækkelige og tilknyttet URL/periode', done: gscVerified, note: gsc.length === 0 ? 'Ikke indlæst' : gscVerified ? 'Tilstrækkelige' : 'Utilstrækkelige eller URL/periode mangler' }]),
+    { label: 'B2B-vurdering SERP-understøttet', done: focus.candidates.some(c => c.b2b.basis === 'serp' && c.b2b.overall !== 'IKKE VURDERET'), note: focus.candidates.some(c => c.b2b.basis !== 'estimat') ? 'Mindst ét søgeord' : 'Kun foreløbige estimater' },
     { label: 'Structured data undersøgt', done: sdActive, note: sdActive ? 'Markeret af dig' : 'Ikke undersøgt' },
   ]
   const coverageDone = coverageItems.filter(c => c.done).length
@@ -627,11 +756,14 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   if (nMan + nIkke > 0) verdict.push(`${nMan} kræver manuel vurdering, ${nIkke} er ikke verificeret.`)
   if (focus.conclusion !== 'afventer') verdict.push(focus.headline + '.')
   if (gsc.length > 0 && potential.confidence === 'ingen') verdict.push('GSC-data er utilstrækkelige til at pege på nye muligheder.')
+  if (isNew) verdict.push('Ny side: analysen bygger på indhold, forretningskontekst, Ahrefs og SERP. Manglende URL-historik er ikke et negativt signal.')
+  else if (gsc.length > 0 && (!input.gscMeta?.url || !input.gscMeta?.period)) verdict.push('GSC-data mangler angivelse af URL og/eller periode – muligheder kan ikke tilskrives siden med sikkerhed.')
   verdict.push(`Delvis analyse: ${coverageDone} af ${coverageItems.length} forhold er undersøgt – scoren er ikke en samlet SEO-vurdering.`)
   void nBeh
 
   // ── Content gaps ────────────────────────────────────────────────────────
-  const missingKeywords = keywordResults.filter(k => k.status === 'Mangler').map(k => k.keyword)
+  const noExpand = new Set(focus.candidates.filter(c => c.role === 'anden-side' || c.role === 'fravaelg').map(c => normKw(c.keyword)))
+  const missingKeywords = keywordResults.filter(k => k.status === 'Mangler' && !noExpand.has(normKw(k.keyword))).map(k => k.keyword)
   const gscMissing = gsc.filter(r => r.impressions >= 10 && !containsKeyword(text, r.keyword)).sort((a, b) => b.impressions - a.impressions).map(r => r.keyword)
   const contentGaps: ContentGap[] = [
     (gsc.length > 0 && potential.confidence === 'ingen')
@@ -653,6 +785,11 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     quickWins.push({ priority: 'yellow', title: 'Hypotese: vurdér GSC-søgninger, der ikke står på siden', detail: `${gscMissing.slice(0, 3).join(', ')} – kun hypotese. Tilføj kun, hvis det passer til sortiment, målgruppe og sidens formål.` })
   } else if (gsc.length > 0 && potential.confidence === 'ingen') {
     quickWins.push({ priority: 'green', title: 'GSC-data er utilstrækkelige', detail: 'For få visninger til at udpege muligheder. Brug en længere periode eller flere søgninger.' })
+  }
+
+  if (isNew && gscAll.length > 0) {
+    const insp = gscAll.filter(r => r.impressions >= 10 && !containsKeyword(text, r.keyword)).sort((a, b) => b.impressions - a.impressions).slice(0, 4).map(r => r.keyword)
+    if (insp.length) quickWins.push({ priority: 'yellow', title: 'Inspiration fra GSC (domæneniveau)', detail: `${insp.join(', ')} – kun inspiration til søgeordskandidater, ikke dokumentation for sidens performance. Vurdér B2B-match og SERP, før noget bruges.` })
   }
 
   return {
@@ -684,5 +821,6 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     coverage: { items: coverageItems, done: coverageDone, total: coverageItems.length },
     serpAnalyses,
     focus,
+    analysisMode: isNew ? 'ny' : 'eksisterende',
   }
 }

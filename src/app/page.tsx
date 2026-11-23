@@ -18,6 +18,7 @@ interface FormState {
   structuredDataTypes: string[]
   intentFit: '' | 'match' | 'partial' | 'mismatch'
   businessContext: string
+  analysisMode: 'ny' | 'eksisterende'
   pageType: PageTypeInput
   gscUrl: string
   gscPeriod: string
@@ -86,6 +87,7 @@ const DEFAULT_FORM: FormState = {
   structuredDataTypes: [],
   intentFit: '',
   businessContext: '',
+  analysisMode: 'eksisterende',
   pageType: '',
   gscUrl: '',
   gscPeriod: '',
@@ -486,7 +488,9 @@ function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped }: {
         approvedKeywords: Object.entries(kwStatus).filter(([, v]) => v === 'godkendt').map(([k]) => k),
         current: { title: form.pageTitle, meta: form.metaDescription, h1: form.h1, body: form.bodyContent.slice(0, 6000) },
         verdicts: result.recommendations.map(r => ({ id: r.id, verdict: r.verdict, observation: r.observation, evidence: r.evidence })),
+        analysisMode: result.analysisMode,
         focus: result.focus.headline,
+        keywordAssessments: result.focus.candidates.map(c => ({ keyword: c.keyword, volume: c.volume, status: c.status, b2b: c.b2b.overall, basis: c.b2b.basis, role: c.role, roleReason: c.roleReason, criteria: c.b2b.criteria.map(x => ({ k: x.label, v: x.verdict })) })),
         serp: Object.values(result.serpAnalyses).map(a => ({ keyword: a.keyword, dominant: a.dominant, intent: a.probableIntent, verdict: a.verdict, uncertain: a.uncertain, date: a.dataDate, topTitles: a.results.slice(0, 5).map(r => r.title) })),
         gsc: { enough: result.potentialConfidence !== 'ingen', notes: result.potentialNotes },
         serpAvailable: Object.keys(serpMap).length > 0,
@@ -691,6 +695,7 @@ export default function SeoDashboard() {
   const [ahrefsError, setAhrefsError] = useState('')
   const [dashTab, setDashTab] = useState('overblik')
   const [kwStatus, setKwStatus] = useState<Record<string, 'kandidat' | 'godkendt' | 'fravalgt'>>({})
+  const [b2bOverride, setB2bOverride] = useState<Record<string, 'match' | 'delvist' | 'ikke'>>({})
   const [serpMap, setSerpMap] = useState<Record<string, SerpData>>({})
   const [serpLoading, setSerpLoading] = useState('')
   const [serpError, setSerpError] = useState<Record<string, string>>({})
@@ -748,11 +753,11 @@ export default function SeoDashboard() {
       gsc: gscData,
       intentFit: form.intentFit,
       businessContext: form.businessContext,
-      keywordStatus: kwStatus, pageType: form.pageType, gscMeta: { url: form.gscUrl, period: form.gscPeriod }, serp: serpMap,
+      keywordStatus: kwStatus, b2bOverride, analysisMode: form.analysisMode, pageType: form.pageType, gscMeta: { url: form.gscUrl, period: form.gscPeriod }, serp: serpMap,
       kwData: kwOverview.map(k => ({ keyword: k.keyword, volume: k.volume, difficulty: k.difficulty, intents: k.intents })),
     }
     setResult(analyzeSeo(input))
-  }, [form, gscData, kwOverview, kwStatus, serpMap])
+  }, [form, gscData, kwOverview, kwStatus, serpMap, b2bOverride])
 
   // Recalculate originalResult when keywords or scraped snapshot changes
   useEffect(() => {
@@ -764,11 +769,11 @@ export default function SeoDashboard() {
       pageTitle: scraped.pageTitle, metaDescription: scraped.metaDescription,
       h1: scraped.h1, bodyContent: scraped.bodyContent,
       structuredDataTypes: form.structuredDataTypes,
-      gsc: gscData, intentFit: form.intentFit, businessContext: form.businessContext, keywordStatus: kwStatus, pageType: form.pageType, gscMeta: { url: form.gscUrl, period: form.gscPeriod }, serp: serpMap,
+      gsc: gscData, intentFit: form.intentFit, businessContext: form.businessContext, keywordStatus: kwStatus, b2bOverride, analysisMode: form.analysisMode, pageType: form.pageType, gscMeta: { url: form.gscUrl, period: form.gscPeriod }, serp: serpMap,
       kwData: kwOverview.map(k => ({ keyword: k.keyword, volume: k.volume, difficulty: k.difficulty, intents: k.intents })),
     }))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.targetKeyword, form.semanticKeywords, scraped, form.structuredDataTypes, gscData, form.intentFit, form.businessContext, kwOverview, kwStatus, serpMap, form.pageType, form.gscUrl, form.gscPeriod])
+  }, [form.targetKeyword, form.semanticKeywords, scraped, form.structuredDataTypes, gscData, form.intentFit, form.businessContext, kwOverview, kwStatus, serpMap, b2bOverride, form.analysisMode, form.pageType, form.gscUrl, form.gscPeriod])
 
   const updateForm = useCallback((key: keyof FormState, val: string) => {
     setForm(prev => ({ ...prev, [key]: val }))
@@ -993,6 +998,7 @@ export default function SeoDashboard() {
               h1: data.h1 || '',
               bodyContent: data.bodyContent || '',
               pageType: form.pageType,
+              analysisMode: form.analysisMode,
               keywordStatus: kwStatus,
             }
             const competitorResult = analyzeSeo(competitorInput)
@@ -1113,6 +1119,7 @@ export default function SeoDashboard() {
                         structuredDataTypes: [],
                         intentFit: '',
                         businessContext: '',
+                        analysisMode: 'eksisterende',
                         pageType: '',
                         gscUrl: '',
                         gscPeriod: '',
@@ -1292,6 +1299,16 @@ export default function SeoDashboard() {
                 </div>
 
                 <div>
+                  <label className="text-xs font-semibold text-gray-500 block mb-2">Analysetilstand</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {([['ny', 'Ny side – SEO-planlægning'], ['eksisterende', 'Eksisterende side – optimering']] as const).map(([val, label]) => (
+                      <button key={val} type="button" onClick={() => setForm(prev => ({ ...prev, analysisMode: val }))}
+                        className={`px-2 py-2 rounded-lg border text-xs font-medium transition-all ${form.analysisMode === val ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-gray-200 bg-gray-50 text-gray-500 hover:bg-gray-100'}`}>{label}</button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1">{form.analysisMode === 'ny' ? 'Bruger indhold, forretningskontekst, Ahrefs og SERP. GSC bruges kun som inspiration, og manglende URL-historik er ikke en fejl.' : 'Kombinerer URL-specifikke GSC-data med Ahrefs, SERP og eksisterende indhold. Angiv URL og periode for GSC-data.'}</p>
+                </div>
+                <div>
                   <label className="text-xs font-semibold text-gray-500 block mb-2">Sidetype <span className="text-gray-300">(bruges til SERP-sammenligning)</span></label>
                   <select value={form.pageType} onChange={e => setForm(prev => ({ ...prev, pageType: e.target.value as PageTypeInput }))}
                     className="w-full px-3 py-2 rounded-lg border border-gray-200 text-xs text-gray-700 focus:outline-none focus:border-blue-300">
@@ -1468,6 +1485,7 @@ export default function SeoDashboard() {
               </div>
             ) : (
               <>
+                <div className="text-xs text-gray-500 bg-white rounded-xl border border-gray-100 px-4 py-2">Analysetilstand: <b>{result.analysisMode === 'ny' ? 'Ny side – SEO-planlægning' : 'Eksisterende side – optimering'}</b>{result.analysisMode === 'ny' ? ' · GSC bruges kun som inspiration.' : ''}</div>
                 {/* Faner */}
                 <div className="flex flex-wrap gap-1 bg-white rounded-2xl p-1.5 shadow-sm border border-gray-100 sticky top-16 z-10">
                   {([
@@ -1735,7 +1753,7 @@ export default function SeoDashboard() {
                     <table className="w-full text-sm min-w-[720px]">
                       <thead>
                         <tr className="border-b border-gray-200">
-                          {['Kandidat', 'Volumen', 'KD', 'SERP', 'Forretningsmatch (tekst-indikation)', 'Status', 'Begrundelse'].map(h => (
+                          {['Kandidat', 'Volumen', 'KD', 'SERP', 'B2B-vurdering', 'Status', 'Begrundelse'].map(h => (
                             <th key={h} className="text-left text-xs font-bold tracking-widest uppercase text-gray-400 pb-2 px-3">{h}</th>
                           ))}
                         </tr>
@@ -1762,16 +1780,32 @@ export default function SeoDashboard() {
                               </button>
                               {serpError[key] && <div className="text-red-500 mt-1 max-w-[220px]">{serpError[key]}</div>}
                             </td>
-                            <td className="py-2 px-3 text-xs">
-                              {c.context === 'sortiment' ? <span className="text-blue-600 font-semibold">Sprogligt overlap</span>
-                                : c.context === 'afgrænset' ? <span className="text-red-500 font-semibold">Overlap med afgrænsning</span>
-                                : c.context === 'ikke-nævnt' ? <span className="text-gray-500 font-semibold">Intet overlap</span>
-                                : <span className="text-gray-400">Ingen kontekst</span>}
-                              <div className="text-gray-400">Ikke et verificeret match</div>
+                            <td className="py-2 px-3 text-xs min-w-[220px]">
+                              <span className={`font-bold px-2 py-0.5 rounded-full ${c.b2b.overall === 'MATCH' ? 'bg-emerald-100 text-emerald-700' : c.b2b.overall === 'DELVIST MATCH' ? 'bg-amber-100 text-amber-700' : c.b2b.overall === 'IKKE MATCH' ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-600'}`}>{c.b2b.overall}</span>
+                              <div className={`mt-1 ${c.b2b.basis === 'estimat' ? 'text-gray-400' : 'text-gray-500'}`}>{c.b2b.basisLabel}</div>
+                              <div className="text-gray-400">{c.b2b.summary}</div>
+                              <details className="mt-1">
+                                <summary className="cursor-pointer text-blue-600">Vis kriterier</summary>
+                                <ul className="mt-1 space-y-1">
+                                  {c.b2b.criteria.map(cr => (
+                                    <li key={cr.key}><b className={cr.verdict === 'match' ? 'text-emerald-600' : cr.verdict === 'delvist' ? 'text-amber-600' : cr.verdict === 'ikke' ? 'text-red-500' : 'text-gray-400'}>{cr.label}: {cr.verdict === 'match' ? 'MATCH' : cr.verdict === 'delvist' ? 'DELVIST' : cr.verdict === 'ikke' ? 'IKKE MATCH' : 'IKKE VURDERET'}</b><div className="text-gray-500">{cr.note}</div></li>
+                                  ))}
+                                </ul>
+                              </details>
+                              <div className="flex flex-wrap gap-2 mt-1">
+                                <span className="text-gray-400">Ret vurdering:</span>
+                                <button onClick={() => setB2bOverride(prev => ({ ...prev, [key]: 'match' }))} className="text-emerald-600 hover:underline">Match</button>
+                                <button onClick={() => setB2bOverride(prev => ({ ...prev, [key]: 'delvist' }))} className="text-amber-600 hover:underline">Delvist</button>
+                                <button onClick={() => setB2bOverride(prev => ({ ...prev, [key]: 'ikke' }))} className="text-red-500 hover:underline">Ikke</button>
+                                {c.b2b.overridden && <button onClick={() => setB2bOverride(prev => { const n = { ...prev }; delete n[key]; return n })} className="text-gray-400 hover:underline">Nulstil</button>}
+                              </div>
+                              <div className="text-gray-400 mt-1">Tekstligt overlap: {c.context === 'sortiment' ? 'ja (indikation)' : c.context === 'afgrænset' ? 'med afgrænsning' : c.context === 'ikke-nævnt' ? 'nej' : 'ingen kontekst'} – afgør aldrig match alene</div>
                             </td>
                             <td className="py-2 px-3 text-xs">
                               <span className={`font-bold px-2 py-0.5 rounded-full ${stCls[c.status]}`}>{stLabel[c.status]}</span>
-                              {c.status !== c.suggested && c.suggested !== 'afventer' && <div className="text-gray-400 mt-1">Anbefalet: {stLabel[c.suggested]}</div>}
+                              <div className={`mt-1 font-semibold ${c.role === 'primaer' ? 'text-emerald-700' : c.role === 'sekundaer' ? 'text-blue-600' : c.role === 'fravaelg' ? 'text-red-500' : c.role === 'anden-side' ? 'text-purple-600' : 'text-gray-400'}`}>
+                                Anbefaling: {c.role === 'primaer' ? 'Primær kandidat' : c.role === 'sekundaer' ? 'Sekundær' : c.role === 'fravaelg' ? 'Fravælg' : c.role === 'anden-side' ? 'Målret en anden side' : 'Afventer grundlag'}
+                              </div>
                               <div className="flex flex-wrap gap-2 mt-1">
                                 <button onClick={() => setKwStatus(prev => ({ ...prev, [key]: 'kandidat' }))} className="text-blue-600 hover:underline">Kandidat</button>
                                 <button onClick={() => setKwStatus(prev => ({ ...prev, [key]: 'godkendt' }))} className="text-emerald-600 hover:underline">Godkend</button>
@@ -1805,7 +1839,7 @@ export default function SeoDashboard() {
                               {a.results.map((r, i) => (
                                 <tr key={i} className="border-t border-gray-50 align-top">
                                   <td className="pr-2 py-1 tabular-nums">{r.position}</td>
-                                  <td className="pr-2 py-1"><div className="text-gray-800">{r.title || '–'}</div><div className="text-gray-400 break-all">{r.url}</div></td>
+                                  <td className="pr-2 py-1"><div className="text-gray-800">{r.title || '–'}{r.b2c && <span className="ml-2 text-amber-600 font-semibold">forbrugersignal</span>}</div><div className="text-gray-400 break-all">{r.url}</div></td>
                                   <td className="pr-2 py-1">{KIND_LABEL[r.kind]}<div className="text-gray-400">{r.basis === 'ahrefs' ? 'Ahrefs' : 'gættet fra titel/URL'}</div></td>
                                   <td className="py-1">{r.updateDate ? r.updateDate.slice(0, 10) : '–'}</td>
                                 </tr>
@@ -1905,6 +1939,9 @@ export default function SeoDashboard() {
                 )}
 
                 </>)}
+                {dashTab === 'gsc' && result.analysisMode === 'ny' && (
+                  <div className="text-xs bg-amber-50 border border-amber-100 rounded-xl px-4 py-2 text-amber-700">Ny side: GSC-data bruges kun som søgeordsinspiration på domæneniveau – ikke som dokumentation for sidens performance.</div>
+                )}
                 {dashTab === 'gsc' && (<>
                 {/* GSC Data comparison */}
                 {gscData.length > 0 && (
