@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
-import { analyzeSeo, SeoInput, SeoResult, KeywordStatus, containsKeyword, toPlainText } from '@/lib/seoEngine'
+import { analyzeSeo, SeoInput, SeoResult, KeywordStatus, containsKeyword, toPlainText, expectedCtr } from '@/lib/seoEngine'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface FormState {
@@ -442,6 +442,97 @@ function AhrefsPreview({ data }: { data: AhrefsRow[] }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
+function GscActivePanel({ data, pageText }: { data: GscData[]; pageText: string }) {
+  const [showAll, setShowAll] = useState(false)
+  const rows = data.map(r => ({
+    ...r,
+    ctr: r.impressions > 0 ? r.clicks / r.impressions : 0,
+    onPage: containsKeyword(pageText, r.keyword),
+  }))
+  const totalClicks = rows.reduce((a, r) => a + r.clicks, 0)
+  const totalImp = rows.reduce((a, r) => a + r.impressions, 0)
+  const missing = rows.filter(r => !r.onPage && r.impressions > 0).sort((a, b) => b.impressions - a.impressions)
+  const closeToTop = rows.filter(r => r.position >= 4 && r.position <= 20 && r.impressions >= 1).sort((a, b) => b.impressions - a.impressions)
+  const lowCtr = rows.filter(r => r.impressions >= 20 && r.ctr < 0.6 * expectedCtr(r.position)).sort((a, b) => b.impressions - a.impressions)
+  const sorted = [...rows].sort((a, b) => b.impressions - a.impressions)
+  const shown = showAll ? sorted : sorted.slice(0, 15)
+  const Card = ({ title, sub, color, items, tag }: { title: string; sub: string; color: string; items: typeof rows; tag: string }) => (
+    <div className={`rounded-2xl p-5 border ${color}`}>
+      <h4 className="text-sm font-bold text-gray-800">{title} <span className="text-gray-400 font-medium">({items.length})</span></h4>
+      <p className="text-xs text-gray-500 mb-3">{sub}</p>
+      {items.length === 0 ? <p className="text-xs text-gray-400">Ingen fundet.</p> : (
+        <div className="space-y-2">
+          {items.slice(0, 8).map((r, i) => (
+            <div key={i} className="flex items-center justify-between p-2 bg-white rounded-lg border border-gray-100">
+              <div className="min-w-0">
+                <div className="font-semibold text-gray-800 text-sm truncate">{r.keyword}</div>
+                <div className="text-xs text-gray-500">{r.impressions.toLocaleString()} visninger · {r.clicks.toLocaleString()} klik · CTR {(r.ctr * 100).toFixed(1)}% · pos {r.position.toFixed(1)}</div>
+              </div>
+              <span className="ml-3 px-2 py-1 bg-gray-100 text-gray-600 text-xs font-semibold rounded whitespace-nowrap">{tag}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+  return (
+    <div className="space-y-5">
+      <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+        <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">Google Search Console · overblik</p>
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          {[
+            ['Søgninger', rows.length.toLocaleString(), 'text-gray-800'],
+            ['Visninger', totalImp.toLocaleString(), 'text-gray-800'],
+            ['Klik', totalClicks.toLocaleString(), 'text-gray-800'],
+            ['På siden', String(rows.filter(r => r.onPage).length), 'text-emerald-600'],
+            ['Mangler på siden', String(missing.length), 'text-red-500'],
+          ].map(([l, v, c]) => (
+            <div key={l} className="bg-gray-50 rounded-xl p-3">
+              <div className={`text-xl font-extrabold tabular-nums ${c}`}>{v}</div>
+              <div className="text-xs text-gray-500">{l}</div>
+            </div>
+          ))}
+        </div>
+        <p className="text-xs text-gray-400 mt-3">Tilføj kun søgninger, der passer til sidens formål og intention – ikke alt, der giver visninger.</p>
+      </div>
+      <Card title="Tilføj til indholdet" sub="Giver visninger, men står ikke på siden" color="bg-amber-50 border-amber-200" items={missing} tag="Tilføj?" />
+      <Card title="Tæt på toppen" sub="Position 4–20 – små forbedringer kan give flere klik" color="bg-blue-50 border-blue-200" items={closeToTop} tag="Quick win" />
+      <Card title="Lav CTR – optimér title/meta" sub="CTR er under 60% af det forventede for placeringen (min. 20 visninger)" color="bg-purple-50 border-purple-200" items={lowCtr} tag="Title/meta" />
+      <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+        <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">Alle søgninger</p>
+        <div className="overflow-x-auto -mx-2">
+          <table className="w-full text-sm min-w-[560px]">
+            <thead>
+              <tr className="border-b border-gray-100">
+                {['Søgning', 'Klik', 'Visninger', 'CTR', 'Position', 'På siden?'].map(h => (
+                  <th key={h} className="text-left text-xs font-bold tracking-widest uppercase text-gray-400 pb-3 px-3">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((r, i) => (
+                <tr key={i} className="border-b border-gray-50 hover:bg-gray-50 transition">
+                  <td className="py-2.5 px-3 font-medium text-gray-800">{r.keyword}</td>
+                  <td className="py-2.5 px-3 text-gray-600 tabular-nums">{r.clicks.toLocaleString()}</td>
+                  <td className="py-2.5 px-3 text-gray-600 tabular-nums">{r.impressions.toLocaleString()}</td>
+                  <td className="py-2.5 px-3 text-gray-600 tabular-nums">{(r.ctr * 100).toFixed(1)}%</td>
+                  <td className="py-2.5 px-3 text-gray-600 tabular-nums">{r.position.toFixed(1)}</td>
+                  <td className="py-2.5 px-3">{r.onPage ? <span className="text-emerald-600 text-xs font-semibold">✓ Ja</span> : <span className="text-red-500 text-xs font-semibold">✗ Nej</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {sorted.length > 15 && (
+          <button onClick={() => setShowAll(!showAll)} className="text-xs text-blue-600 hover:underline mt-3">
+            {showAll ? 'Vis færre' : `Vis alle ${sorted.length}`}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function SeoDashboard() {
   const [form, setForm] = useState<FormState>(DEFAULT_FORM)
   const [result, setResult] = useState<SeoResult | null>(null)
@@ -454,10 +545,11 @@ export default function SeoDashboard() {
   const [ahrefsData, setAhrefsData] = useState<AhrefsRow[]>([])
   const [ahrefsFileName, setAhrefsFileName] = useState('')
   const [ahrefsError, setAhrefsError] = useState('')
+  const [dashTab, setDashTab] = useState('overblik')
   const [kwOverview, setKwOverview] = useState<KwOverviewRow[]>([])
   const [scraped, setScraped] = useState<ScrapedSnapshot>({ pageTitle: '', metaDescription: '', h1: '', bodyContent: '' })
   const [originalResult, setOriginalResult] = useState<SeoResult | null>(null)
-  const [activePanel, setActivePanel] = useState<'dashboard' | 'ahrefs'>('dashboard')
+  const [activePanel, setActivePanel] = useState<'dashboard' | 'ahrefs' | 'gsc'>('dashboard')
   const [competitorAnalysis, setCompetitorAnalysis] = useState<{url: string, result: SeoResult}[]>([])
   const [analyzingCompetitor, setAnalyzingCompetitor] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -745,12 +837,17 @@ export default function SeoDashboard() {
           <div className="flex items-center gap-3">
             <div className="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold text-white" style={{ background: '#4f7fff' }}>S</div>
             <span className="font-semibold text-sm text-gray-800">SEO Dashboard</span>
-            {ahrefsData.length > 0 && (
+            {(ahrefsData.length > 0 || gscData.length > 0) && (
               <div className="flex items-center gap-1 ml-2">
                 <button onClick={() => setActivePanel('dashboard')} className={`px-3 py-1 rounded-full text-xs font-semibold transition ${activePanel === 'dashboard' ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:bg-gray-100'}`}>Dashboard</button>
+                {gscData.length > 0 && (
+                  <button onClick={() => setActivePanel('gsc')} className={`px-3 py-1 rounded-full text-xs font-semibold transition ${activePanel === 'gsc' ? 'bg-emerald-100 text-emerald-700' : 'text-gray-500 hover:bg-gray-100'}`}>GSC</button>
+                )}
+                {ahrefsData.length > 0 && (
                 <button onClick={() => setActivePanel('ahrefs')} className={`px-3 py-1 rounded-full text-xs font-semibold transition ${activePanel === 'ahrefs' ? 'bg-purple-100 text-purple-700' : 'text-gray-500 hover:bg-gray-100'}`}>
                   Ahrefs {ahrefsData.filter(r => r.otherUrls.length > 0).length > 0 && <span className="ml-1 bg-red-100 text-red-600 px-1 rounded">⚡{ahrefsData.filter(r => r.otherUrls.length > 0).length}</span>}
                 </button>
+                )}
               </div>
             )}
           </div>
@@ -947,7 +1044,7 @@ export default function SeoDashboard() {
                     <>
                       <div className="flex items-center justify-between mt-2">
                         <p className="text-xs text-green-600 font-medium">✓ {gscData.length} keywords indlæst</p>
-                        <button onClick={() => { setGscData([]); setGscFileName('') }} className="text-xs text-gray-400 hover:text-red-500 transition">× Fjern</button>
+                        <button onClick={() => { setGscData([]); setGscFileName(''); setActivePanel('dashboard') }} className="text-xs text-gray-400 hover:text-red-500 transition">× Fjern</button>
                       </div>
                       <GscPreview data={gscData} />
                     </>
@@ -1131,6 +1228,7 @@ export default function SeoDashboard() {
         <div className="flex-1 overflow-y-auto bg-gray-50 p-6">
           <div className="max-w-5xl mx-auto space-y-5">
             {activePanel === 'ahrefs' && ahrefsData.length > 0 && <AhrefsPanel data={ahrefsData} />}
+            {activePanel === 'gsc' && gscData.length > 0 && <GscActivePanel data={gscData} pageText={[form.pageTitle, form.metaDescription, form.h1, toPlainText(form.bodyContent)].join(' ')} />}
 
             {activePanel === 'dashboard' && (<>
             {!result ? (
@@ -1140,6 +1238,23 @@ export default function SeoDashboard() {
               </div>
             ) : (
               <>
+                {/* Faner */}
+                <div className="flex flex-wrap gap-1 bg-white rounded-2xl p-1.5 shadow-sm border border-gray-100 sticky top-16 z-10">
+                  {([
+                    ['overblik', 'Overblik'],
+                    ['editor', 'Rediger live'],
+                    ['anbefalinger', 'Anbefalinger'],
+                    ['keywords', 'Keywords'],
+                    ...(competitorAnalysis.length > 0 ? [['konkurrent', 'Konkurrenter']] : []),
+                    ...(gscData.length > 0 ? [['gsc', 'GSC-detaljer']] : []),
+                  ] as [string, string][]).map(([id, label]) => (
+                    <button key={id} onClick={() => setDashTab(id)}
+                      className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition ${dashTab === id ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {dashTab === 'overblik' && (<>
                 {/* Score Ring */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up">
                   <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">On-page kvalitet</p>
@@ -1192,6 +1307,8 @@ export default function SeoDashboard() {
                   )}
                 </div>
 
+                </>)}
+                {dashTab === 'konkurrent' && (<>
                 {/* Competitor comparison */}
                 {competitorAnalysis.length > 0 && (
                   <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-1">
@@ -1319,9 +1436,13 @@ export default function SeoDashboard() {
                   </div>
                 )}
 
+                </>)}
+                {dashTab === 'editor' && (<>
                 {/* Live Editor */}
                 <LiveEditor scraped={scraped} form={form} updateForm={updateForm} setForm={setForm} result={result} originalResult={originalResult} />
 
+                </>)}
+                {dashTab === 'anbefalinger' && (<>
                 {/* Recommendations */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-1">
                   <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">SEO Recommendations</p>
@@ -1347,6 +1468,8 @@ export default function SeoDashboard() {
                   </div>
                 </div>
 
+                </>)}
+                {dashTab === 'keywords' && (<>
                 {/* Keyword pills + table */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-2">
                   <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">Brug disse keywords mere</p>
@@ -1394,6 +1517,8 @@ export default function SeoDashboard() {
                 </div>
 
 
+                </>)}
+                {dashTab === 'keywords' && (<>
                 {/* Ahrefs keyword-oversigt (volumen, KD, intent) */}
                 {kwOverview.length > 0 && (
                   <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-3">
@@ -1428,6 +1553,8 @@ export default function SeoDashboard() {
                   </div>
                 )}
 
+                </>)}
+                {dashTab === 'gsc' && (<>
                 {/* GSC Data comparison */}
                 {gscData.length > 0 && (
                   <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-3">
@@ -1470,6 +1597,8 @@ export default function SeoDashboard() {
                   </div>
                 )}
 
+                </>)}
+                {dashTab === 'gsc' && (<>
                 {/* GSC Keyword Gap Analysis - Low-Hanging Fruit */}
                 {gscData.length > 0 && (
                   <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-3">
@@ -1596,6 +1725,8 @@ export default function SeoDashboard() {
                   </div>
                 )}
 
+                </>)}
+                {dashTab === 'overblik' && (<>
                 {/* Content gaps */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-3">
                   <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">Content Gap Analyse</p>
@@ -1612,6 +1743,8 @@ export default function SeoDashboard() {
                   </div>
                 </div>
 
+                </>)}
+                {dashTab === 'overblik' && (<>
                 {/* Quick wins */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up-4">
                   <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">Quick Wins – Prioriteret Rækkefølge</p>
@@ -1631,6 +1764,8 @@ export default function SeoDashboard() {
                   </div>
                 </div>
 
+                </>)}
+                {dashTab === 'keywords' && (<>
                 {/* Keyword Sections */}
                 {(() => {
                   const optimizeKeywords = result.keywords.filter(k => k.status === 'Optimer')
@@ -1697,6 +1832,7 @@ export default function SeoDashboard() {
                     </>
                   )
                 })()}
+                </>)}
               </>
             )}
             </>)}

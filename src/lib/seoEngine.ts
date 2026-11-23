@@ -133,7 +133,7 @@ function fullText(input: SeoInput): string {
   ].join(' ').toLowerCase()
 }
 
-function expectedCtr(pos: number): number {
+export function expectedCtr(pos: number): number {
   if (pos <= 1.5) return 0.28
   if (pos <= 2.5) return 0.15
   if (pos <= 3.5) return 0.10
