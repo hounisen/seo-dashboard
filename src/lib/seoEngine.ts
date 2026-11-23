@@ -76,6 +76,9 @@ export interface SeoResult {
   onPageScore: number
   potentialScore: number | null
   potentialNotes: string[]
+  potentialConfidence: 'ingen' | 'lav' | 'ok'
+  gscStats: { queries: number; impressions: number }
+  verdict: string[]
 }
 
 // ── Fleksibel keyword-matching ──────────────────────────────────────────────
@@ -148,10 +151,18 @@ function computePotential(
   gsc: GscRow[],
   text: string,
   intentFit: SeoInput['intentFit'],
-): { score: number | null; notes: string[] } {
+): { score: number | null; notes: string[]; confidence: 'ingen' | 'lav' | 'ok'; queries: number; impressions: number } {
   const rows = gsc.filter(r => r.impressions > 0)
   const totalImp = rows.reduce((a, r) => a + r.impressions, 0)
-  if (totalImp === 0) return { score: null, notes: [] }
+  if (totalImp === 0) return { score: null, notes: [], confidence: 'ingen', queries: 0, impressions: 0 }
+  if (totalImp < 100 || rows.length < 5) {
+    return {
+      score: null,
+      notes: [`Utilstrækkelige data: ${rows.length} søgninger og ${totalImp.toLocaleString()} visninger i alt. Der kræves mindst ca. 5 søgninger og 100 visninger, før et potentiale giver mening.`],
+      confidence: 'ingen', queries: rows.length, impressions: totalImp,
+    }
+  }
+  const confidence: 'lav' | 'ok' = totalImp < 500 ? 'lav' : 'ok'
   const share = (f: (r: GscRow) => boolean) =>
     rows.filter(f).reduce((a, r) => a + r.impressions, 0) / totalImp
 
@@ -168,9 +179,12 @@ function computePotential(
     `${Math.round(ctrGap * 100)}% af visningerne har lavere CTR end forventet for placeringen.`,
     `${Math.round(uncovered * 100)}% af visningerne kommer fra søgninger, der ikke står på siden.`,
   ]
+  notes.push(`Datagrundlag: ${rows.length} søgninger, ${totalImp.toLocaleString()} visninger. Perioden fremgår ikke af filen – tjek eksporten i GSC.`)
+  if (confidence === 'lav') notes.push('Tallet er usikkert: få visninger i alt.')
+  notes.push('Kun søgninger med relevans for sidens formål og målgruppe bør tælle som muligheder – vurdér dem selv.')
   if (intentFit === 'partial') notes.push('Intent delvist match: potentialet er nedvægtet (×0,7).')
   if (intentFit === 'mismatch') notes.push('Intent matcher ikke B2B-målgruppen: potentialet er kraftigt nedvægtet (×0,3).')
-  return { score: Math.round(Math.min(raw, 100)), notes }
+  return { score: Math.round(Math.min(raw, 100)), notes, confidence, queries: rows.length, impressions: totalImp }
 }
 
 export function analyzeSeo(input: SeoInput): SeoResult {
@@ -289,19 +303,22 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   const sdActive = !!(input.structuredDataTypes && input.structuredDataTypes.length > 0)
 
   // Title
-  const keepTitle = titleHasKeyword && titleGoodLength && targetRanksWell && targetCtrOk
+  const intentDoubt = input.intentFit === 'partial' || input.intentFit === 'mismatch'
+  const keepTitle = (titleHasKeyword && titleGoodLength && targetRanksWell && targetCtrOk) || (intentDoubt && titleGoodLength)
   const recTitle: RecommendationItem = {
     id: 'title',
     label: 'Title Tag',
-    status: titleHasKeyword && titleGoodLength ? 'ok' : titleHasKeyword ? 'warn' : 'error',
+    status: keepTitle || (titleHasKeyword && titleGoodLength) ? 'ok' : titleHasKeyword ? 'warn' : 'error',
     statusLabel: keepTitle ? 'Behold uændret' : titleHasKeyword && titleGoodLength ? 'Optimised' : titleHasKeyword ? '1 advarsel' : '1 fejl',
-    detail: keepTitle
-      ? `Behold title uændret (${input.pageTitle.length} tegn).` + why(`Den indeholder keywordet, har god længde, og siden rangerer allerede godt med fornuftig CTR. ${gscLine} En ændring risikerer at flytte placeringen.`)
+    detail: keepTitle && intentDoubt && !titleHasKeyword
+      ? `Behold nuværende title (${input.pageTitle.length} tegn) – og overvej først, om "${input.targetKeyword}" overhovedet bør være sidens primære søgeord.` + why('Du har vurderet, at intentionen ikke (fuldt) matcher målgruppen. En title, der passer til sortiment og målgruppe, er vigtigere end at få et bestemt keyword med.')
+      : keepTitle
+      ? `Behold title uændret (${input.pageTitle.length} tegn).` + why(intentDoubt ? 'Du har vurderet, at intentionen kun delvist matcher – så er en præcis title bedre end at presse keywordet ind.' : `Den indeholder keywordet, har god længde, og siden rangerer allerede godt med fornuftig CTR. ${gscLine} En ændring risikerer at flytte placeringen.`)
       : titleHasKeyword
         ? titleGoodLength
           ? `Title tag er god (${input.pageTitle.length} tegn) og indeholder target keyword.` + why(`Title er det stærkeste on-page signal for keywordet.${gscLine ? ' ' + gscLine : ''}`)
           : `Title indeholder keyword, men er ${input.pageTitle.length} tegn. Optimal længde: 30–65 tegn.` + why('Længere titler afkortes i søgeresultatet og mister budskab.')
-        : `Title mangler target keyword "${input.targetKeyword}". Tilføj det tidligt i titlen.` + why('Google og brugeren bruger titlen til at afgøre om siden matcher søgningen.'),
+        : `Title mangler target keyword "${input.targetKeyword}". Vurdér først, om det bør være sidens primære søgeord (se Søgeintention) – tilføj det kun, hvis det matcher sortiment og målgruppe.` + why('Google og brugeren bruger titlen til at afgøre om siden matcher søgningen – men et forkert primært søgeord er værre end et manglende.'),
   }
 
   // H1
@@ -353,41 +370,41 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   }
 
   // Meta
-  const keepMeta = metaHasKeyword && metaGoodLength && targetRanksWell && targetCtrOk
+  const keepMeta = (metaHasKeyword && metaGoodLength && targetRanksWell && targetCtrOk) || (intentDoubt && metaGoodLength)
   const recMeta: RecommendationItem = {
     id: 'meta',
     label: 'Meta Description',
-    status: metaHasKeyword && metaGoodLength ? 'ok' : 'warn',
+    status: keepMeta || (metaHasKeyword && metaGoodLength) ? 'ok' : 'warn',
     statusLabel: keepMeta ? 'Behold uændret' : metaHasKeyword && metaGoodLength ? 'Optimised' : '1 advarsel',
     detail: keepMeta
-      ? `Behold meta description uændret (${input.metaDescription.length} tegn).` + why(`Keyword er med, længden passer, og CTR er rimelig for placeringen. ${gscLine}`)
+      ? `Behold meta description uændret (${input.metaDescription.length} tegn).` + why(intentDoubt && !(targetRanksWell && targetCtrOk) ? 'Længden passer, og du har vurderet, at intentionen kun delvist matcher – så er en præcis beskrivelse bedre end at presse keywordet ind.' : `Keyword er med, længden passer, og CTR er rimelig for placeringen. ${gscLine}`)
       : metaHasKeyword
         ? metaGoodLength
-          ? `Meta description er god (${input.metaDescription.length} tegn).` + why('Meta påvirker ikke placeringen direkte, men CTR – så den skal sælge klikket.')
+          ? `Meta description er god (${input.metaDescription.length} tegn).` + why('Meta påvirker ikke placeringen direkte. Google vælger selv, hvilket snippet der vises, så en CTR-effekt kan ikke garanteres.')
           : `Meta indeholder keyword, men er ${input.metaDescription.length} tegn. Optimal: 120–160 tegn.` + why('For lange beskrivelser afkortes.')
-        : `Meta mangler target keyword og/eller har uheldig længde (${input.metaDescription.length} tegn). Optimal: 120–160 tegn.` + why('Fremhævede søgeord i snippet øger CTR.'),
+        : `Meta mangler target keyword og/eller har uheldig længde (${input.metaDescription.length} tegn). Optimal: 120–160 tegn.` + why('Et relevant snippet kan hjælpe CTR, men Google kan vælge en anden tekst, så effekten kan ikke garanteres.'),
   }
 
-  // FAQ
+  // FAQ (indhold til brugeren – ikke længere SEO-tiltag via FAQPage rich results)
   const recFaq: RecommendationItem = {
     id: 'faq',
     label: 'FAQ Section',
-    status: hasFaq ? 'ok' : 'warn',
-    statusLabel: hasFaq ? 'Optimised' : '1 advarsel',
+    status: 'ok',
+    statusLabel: hasFaq ? 'Fundet' : 'Valgfri',
     detail: hasFaq
-      ? 'FAQ-sektion fundet. Sørg for JSON-LD, så siden kan få rich snippets.'
-      : 'Ingen FAQ-sektion fundet. Tilføj kun FAQ, hvis I har reelle spørgsmål kunderne stiller.' + why('FAQ dækker long-tail søgninger og kan give rich snippets – men kun hvis spørgsmålene er ægte.'),
+      ? 'FAQ-sektion fundet. Den hjælper brugerne – men Google har udfaset FAQ rich results, så FAQPage JSON-LD giver ikke længere udvidede resultater.'
+      : 'Ingen FAQ-sektion. Tilføj kun, hvis kunderne reelt stiller spørgsmålene – som hjælp til brugeren, ikke for rich results.' + why('Google har udfaset FAQ rich results, så FAQPage JSON-LD er ikke længere et SEO-tiltag.'),
   }
 
-  // Structured data
+  // Structured data (værktøjet undersøger ikke sidens markup – kun din markering)
   const recSd: RecommendationItem = {
     id: 'structured-data',
     label: 'Structured Data',
     status: sdActive ? 'ok' : 'warn',
-    statusLabel: sdActive ? `Aktiv: ${input.structuredDataTypes!.join(', ')}` : 'Ikke bekræftet',
+    statusLabel: sdActive ? `Aktiv: ${input.structuredDataTypes!.join(', ')}` : 'Ikke undersøgt',
     detail: sdActive
-      ? `✓ Structured data bekræftet: ${input.structuredDataTypes!.join(', ')}. Test: https://search.google.com/test/rich-results`
-      : `Structured data ikke markeret. Angiv JSON-LD schema-typer i venstre panel. Test: https://search.google.com/test/rich-results`,
+      ? `✓ Du har markeret: ${input.structuredDataTypes!.join(', ')}. Test markup her: https://search.google.com/test/rich-results`
+      : `Værktøjet læser ikke sidens markup, så det kan ikke se, om structured data mangler. Tjek i Rich Results Test (https://search.google.com/test/rich-results) og markér de typer, siden har.`,
   }
 
   const recommendations: RecommendationItem[] = [recTitle, recH1, recH2, recContent, recLinks, recMeta, recFaq, recSd]
@@ -433,10 +450,10 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     {
       num: 'Gap 03 · Strukturerede data',
       tag: '#2dce89',
-      title: sdActive ? 'Structured data er på plads' : 'Structured data mangler',
+      title: sdActive ? 'Structured data markeret' : 'Structured data ikke undersøgt',
       description: sdActive
-        ? 'Overvej BreadcrumbList/ItemList, hvis de ikke allerede er markeret.'
-        : 'Markér de schema-typer, siden bruger, i venstre panel – eller tilføj dem, hvis de mangler.',
+        ? 'Du har markeret schema-typer. Verificér i Rich Results Test, at markup faktisk er til stede og gyldigt.'
+        : 'Værktøjet kan ikke se sidens markup. Tjek i Rich Results Test, før du konkluderer, at noget mangler.',
       color: '#2dce89',
     },
   ]
@@ -448,21 +465,33 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     quickWins.push({
       priority: 'red',
       title: 'Opdatér meta description',
-      detail: `Medtag "${input.targetKeyword}" og hold 120–160 tegn. Direkte effekt på CTR i søgeresultatet.`,
+      detail: `Medtag "${input.targetKeyword}" og hold 120–160 tegn. Kan hjælpe CTR, men Google vælger selv snippet.`,
     })
   }
   if (!titleHasKeyword) {
     quickWins.push({
-      priority: 'red',
-      title: 'Få keywordet ind i title',
-      detail: `Title mangler "${input.targetKeyword}" – det er det stærkeste on-page signal.`,
+      priority: input.intentFit === 'match' ? 'red' : 'yellow',
+      title: input.intentFit === 'match' ? 'Få keywordet ind i title' : 'Afklar om keywordet bør være primært',
+      detail: input.intentFit === 'match'
+        ? `Title mangler "${input.targetKeyword}" – det er det stærkeste on-page signal.`
+        : `Title mangler "${input.targetKeyword}". Vurdér først søgeintention og sortimentsmatch (feltet i venstre side) – en præcis title er bedre end et forkert primært søgeord.`,
     })
   }
-  if (gscMissing.length > 0) {
+  const gscStrong = gsc
+    .filter(r => r.impressions >= 10 && !containsKeyword(text, r.keyword))
+    .sort((a, b) => b.impressions - a.impressions)
+    .map(r => r.keyword)
+  if (potential.confidence !== 'ingen' && gscStrong.length > 0) {
     quickWins.push({
       priority: 'yellow',
-      title: 'Dæk søgninger fra GSC, der mangler på siden',
-      detail: `${gscMissing.slice(0, 3).join(', ')} giver visninger, men står ikke på siden. Tilføj dem kun hvis de passer til intentionen.`,
+      title: 'Vurdér søgninger fra GSC, der ikke står på siden',
+      detail: `${gscStrong.slice(0, 3).join(', ')} har mindst 10 visninger. At de ikke står på siden er ikke i sig selv et problem – tilføj kun dem, der passer til sortiment, målgruppe og sidens formål.`,
+    })
+  } else if (gsc.length > 0 && potential.confidence === 'ingen') {
+    quickWins.push({
+      priority: 'green',
+      title: 'GSC-data er utilstrækkelige',
+      detail: 'For få visninger til at udpege nye muligheder. Brug en længere periode eller flere søgninger, før du handler på dem.',
     })
   } else if (missingKeywords.length > 0) {
     quickWins.push({
@@ -485,13 +514,6 @@ export function analyzeSeo(input: SeoInput): SeoResult {
       detail: `Kun ~${wordCount} ord reelt indhold. Tilføj afsnit, der besvarer brugerens spørgsmål.`,
     })
   }
-  if (!hasFaq) {
-    quickWins.push({
-      priority: 'green',
-      title: 'Overvej FAQ med reelle kundespørgsmål',
-      detail: 'Kun hvis I har ægte spørgsmål – tilføj så JSON-LD (FAQPage).',
-    })
-  }
   if (internalLinks < 3) {
     quickWins.push({
       priority: 'green',
@@ -499,6 +521,18 @@ export function analyzeSeo(input: SeoInput): SeoResult {
       detail: 'Link fra relaterede sider med naturlige ankertekster.',
     })
   }
+
+  // ── SAMLET VURDERING ─────────────────────────────────────────────────────
+  const verdict: string[] = []
+  if (keepTitle && keepMeta) verdict.push('Behold den eksisterende title og meta description.')
+  else if (keepTitle) verdict.push('Behold den eksisterende title.')
+  else if (keepMeta) verdict.push('Behold den eksisterende meta description.')
+  const covered = keywordResults.filter(k => k.status === 'God').map(k => k.keyword)
+  if (covered.length > 0) verdict.push(`Allerede dækket: ${covered.slice(0, 4).join(', ')}.`)
+  if (missingKeywords.length > 0) verdict.push(`Ikke fundet på siden: ${missingKeywords.slice(0, 4).join(', ')} – tilføj kun, hvis det passer til sidens formål.`)
+  if (gsc.length > 0 && potential.confidence === 'ingen') verdict.push('GSC-data er utilstrækkelige til at pege på nye muligheder.')
+  if (!input.intentFit) verdict.push('Vurdér søgeintention og B2B-match, før du ændrer title, H1 eller brødtekst.')
+  if (verdict.length === 0) verdict.push('Ingen tydelige handlinger – siden ser ud til at passe til sit formål.')
 
   return {
     score,
@@ -519,5 +553,8 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     onPageScore: percentage,
     potentialScore: potential.score,
     potentialNotes: potential.notes,
+    potentialConfidence: potential.confidence,
+    gscStats: { queries: potential.queries, impressions: potential.impressions },
+    verdict,
   }
 }

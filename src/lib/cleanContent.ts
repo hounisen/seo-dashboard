@@ -17,7 +17,10 @@ export function cleanMetaDescription(raw: string): string {
 }
 
 export function cleanMarkdown(md: string): string {
-  const lines = md.split('\n')
+  let lines = md.split('\n')
+  // Alt før første H1 er skabelon (tilbage-links, forfatterbokse, "Om ...") – fjernes, hvis H1 findes tidligt
+  const h1Idx = lines.findIndex(l => /^#\s+\S/.test(l.trim()))
+  if (h1Idx > 0 && h1Idx <= 40) lines = lines.slice(h1Idx)
   const cleaned: string[] = []
   let skipBlock = false
   let skipUntil = false
@@ -70,6 +73,10 @@ export function cleanMarkdown(md: string): string {
     if (/^\[.*@.*\]\(mailto:/.test(t)) continue
     if (/^[✓✔●•▸]\s/.test(t) && t.length < 80 && !/[.,:;]$/.test(t)) continue
     if (/^(Dansk support|Dag[- ]til[- ]dag[- ](levering|afsendelse)|Hurtig genbestilling|Faguddannet personale|Fri fragt|Gratis fragt|Sikker betaling)(\s*\(.*\))?$/i.test(t)) continue
+
+    // Forfatterbokse og tilbage-links
+    if (/^(Af|Skrevet af|Forfatter|Om forfatteren|Udgivet|Opdateret|Læsetid)\b[:\s]/i.test(t) && t.length < 100) continue
+    if (/^\[?\s*[←‹«]\s*(Tilbage|Back)/i.test(t) || /^\[(Tilbage|Back)[^\]]*\]\(/i.test(t)) continue
 
     // Navigation, social, share
     if (/^\[(Forrige|Næste|Scroll to top|Previous Slide|Next Slide)/i.test(t)) continue

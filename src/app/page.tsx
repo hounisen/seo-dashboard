@@ -444,6 +444,7 @@ function AhrefsPreview({ data }: { data: AhrefsRow[] }) {
 
 function GscActivePanel({ data, pageText }: { data: GscData[]; pageText: string }) {
   const [showAll, setShowAll] = useState(false)
+  const [rejected, setRejected] = useState<string[]>([])
   const rows = data.map(r => ({
     ...r,
     ctr: r.impressions > 0 ? r.clicks / r.impressions : 0,
@@ -451,9 +452,11 @@ function GscActivePanel({ data, pageText }: { data: GscData[]; pageText: string 
   }))
   const totalClicks = rows.reduce((a, r) => a + r.clicks, 0)
   const totalImp = rows.reduce((a, r) => a + r.impressions, 0)
-  const missing = rows.filter(r => !r.onPage && r.impressions > 0).sort((a, b) => b.impressions - a.impressions)
-  const closeToTop = rows.filter(r => r.position >= 4 && r.position <= 20 && r.impressions >= 1).sort((a, b) => b.impressions - a.impressions)
-  const lowCtr = rows.filter(r => r.impressions >= 20 && r.ctr < 0.6 * expectedCtr(r.position)).sort((a, b) => b.impressions - a.impressions)
+  const insufficient = totalImp < 100 || rows.length < 5
+  const notRej = (r: { keyword: string }) => !rejected.includes(r.keyword)
+  const missing = insufficient ? [] : rows.filter(r => !r.onPage && r.impressions >= 10 && notRej(r)).sort((a, b) => b.impressions - a.impressions)
+  const closeToTop = insufficient ? [] : rows.filter(r => r.position >= 4 && r.position <= 20 && r.impressions >= 10 && notRej(r)).sort((a, b) => b.impressions - a.impressions)
+  const lowCtr = insufficient ? [] : rows.filter(r => r.impressions >= 20 && r.ctr < 0.6 * expectedCtr(r.position) && notRej(r)).sort((a, b) => b.impressions - a.impressions)
   const sorted = [...rows].sort((a, b) => b.impressions - a.impressions)
   const shown = showAll ? sorted : sorted.slice(0, 15)
   const Card = ({ title, sub, color, items, tag }: { title: string; sub: string; color: string; items: typeof rows; tag: string }) => (
@@ -468,7 +471,10 @@ function GscActivePanel({ data, pageText }: { data: GscData[]; pageText: string 
                 <div className="font-semibold text-gray-800 text-sm truncate">{r.keyword}</div>
                 <div className="text-xs text-gray-500">{r.impressions.toLocaleString()} visninger · {r.clicks.toLocaleString()} klik · CTR {(r.ctr * 100).toFixed(1)}% · pos {r.position.toFixed(1)}</div>
               </div>
-              <span className="ml-3 px-2 py-1 bg-gray-100 text-gray-600 text-xs font-semibold rounded whitespace-nowrap">{tag}</span>
+              <div className="ml-3 flex items-center gap-2 flex-shrink-0">
+                <span className="px-2 py-1 bg-gray-100 text-gray-600 text-xs font-semibold rounded whitespace-nowrap">{tag}</span>
+                <button onClick={() => setRejected(prev => [...prev, r.keyword])} className="text-xs text-gray-400 hover:text-red-500 transition" title="Afvis: ikke relevant for siden">× Afvis</button>
+              </div>
             </div>
           ))}
         </div>
@@ -493,10 +499,18 @@ function GscActivePanel({ data, pageText }: { data: GscData[]; pageText: string 
             </div>
           ))}
         </div>
-        <p className="text-xs text-gray-400 mt-3">Tilføj kun søgninger, der passer til sidens formål og intention – ikke alt, der giver visninger.</p>
+        <p className="text-xs text-gray-400 mt-3">Perioden fremgår ikke af filen – tjek eksporten i GSC. En søgning kan give visninger uden at være relevant, og at den ikke står på siden er ikke i sig selv et problem.</p>
+        {insufficient && (
+          <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800">
+            <strong>Utilstrækkelige data.</strong> {rows.length} søgninger og {totalImp.toLocaleString()} visninger er for lidt til at udpege muligheder. Brug en længere periode eller flere søgninger.
+          </div>
+        )}
+        {rejected.length > 0 && (
+          <p className="text-xs text-gray-400 mt-2">{rejected.length} søgning(er) afvist. <button onClick={() => setRejected([])} className="text-blue-600 hover:underline">Fortryd</button></p>
+        )}
       </div>
-      <Card title="Tilføj til indholdet" sub="Giver visninger, men står ikke på siden" color="bg-amber-50 border-amber-200" items={missing} tag="Tilføj?" />
-      <Card title="Tæt på toppen" sub="Position 4–20 – små forbedringer kan give flere klik" color="bg-blue-50 border-blue-200" items={closeToTop} tag="Quick win" />
+      <Card title="Mulige emner at dække" sub="Mindst 10 visninger og ikke på siden – vurdér relevans for sortiment og målgruppe før du tilføjer" color="bg-amber-50 border-amber-200" items={missing} tag="Vurdér" />
+      <Card title="Tæt på toppen" sub="Position 4–20 og mindst 10 visninger – kun hvis søgningen er relevant for siden" color="bg-blue-50 border-blue-200" items={closeToTop} tag="Quick win" />
       <Card title="Lav CTR – optimér title/meta" sub="CTR er under 60% af det forventede for placeringen (min. 20 visninger)" color="bg-purple-50 border-purple-200" items={lowCtr} tag="Title/meta" />
       <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
         <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">Alle søgninger</p>
@@ -1255,6 +1269,13 @@ export default function SeoDashboard() {
                   ))}
                 </div>
                 {dashTab === 'overblik' && (<>
+                <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 border-l-4 border-l-blue-500">
+                  <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-2">Samlet vurdering</p>
+                  <ul className="space-y-1">
+                    {result.verdict.map((v, i) => (<li key={i} className="text-sm text-gray-700">• {v}</li>))}
+                  </ul>
+                  <p className="text-xs text-gray-400 mt-3">En anbefaling skal være fagligt begrundet. Scoren er et hjælpemiddel – ikke et mål i sig selv.</p>
+                </div>
                 {/* Score Ring */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up">
                   <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">On-page kvalitet</p>
@@ -1289,11 +1310,16 @@ export default function SeoDashboard() {
                       </div>
                       <div className="mt-4 pt-4 border-t border-gray-100">
                         <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-1">SEO-potentiale <span className="normal-case font-normal text-gray-400">(højere = mere at hente)</span></p>
-                        {result.potentialScore === null ? (
+                        {result.potentialScore === null && result.gscStats.impressions > 0 ? (
+                          <div>
+                            <p className="text-sm font-semibold text-amber-700">Utilstrækkelige data</p>
+                            <p className="text-xs text-gray-500 mt-0.5">{result.potentialNotes[0]}</p>
+                          </div>
+                        ) : result.potentialScore === null ? (
                           <p className="text-xs text-gray-500">Upload en GSC-fil for at se potentialet. On-page-scoren ovenfor måler kun sidens kvalitet – ikke hvor meget trafik der er at hente.</p>
                         ) : (
                           <div>
-                            <div className="text-2xl font-extrabold text-purple-600 tabular-nums">{result.potentialScore}<span className="text-base text-gray-400 font-semibold">%</span></div>
+                            <div className="text-2xl font-extrabold text-purple-600 tabular-nums">{result.potentialScore}<span className="text-base text-gray-400 font-semibold">%</span>{result.potentialConfidence === 'lav' && <span className="ml-2 text-xs font-semibold text-amber-600 align-middle">usikkert</span>}</div>
                             <ul className="mt-1 space-y-0.5">
                               {result.potentialNotes.map((n, i) => (<li key={i} className="text-xs text-gray-500">• {n}</li>))}
                             </ul>
@@ -1611,12 +1637,12 @@ export default function SeoDashboard() {
                     {(() => {
                       const text = [form.pageTitle, form.metaDescription, form.h1, toPlainText(form.bodyContent)].join(' ')
                       const missingHighImpression = gscData
-                        .filter(row => !containsKeyword(text, row.keyword) && row.impressions > 0)
+                        .filter(row => !containsKeyword(text, row.keyword) && row.impressions >= 10)
                         .sort((a, b) => b.impressions - a.impressions)
                         .slice(0, 5)
                       
                       const lowPosition = gscData
-                        .filter(row => row.position >= 4 && row.position <= 15 && row.impressions > 5)
+                        .filter(row => row.position >= 4 && row.position <= 15 && row.impressions >= 10)
                         .sort((a, b) => b.impressions - a.impressions)
                         .slice(0, 5)
                       
@@ -1636,8 +1662,8 @@ export default function SeoDashboard() {
                               <div className="flex items-center gap-2 mb-3">
                                 <span className="text-xl">🎯</span>
                                 <div>
-                                  <h4 className="text-sm font-bold text-amber-900">Low-Hanging Fruit</h4>
-                                  <p className="text-xs text-amber-700">Keywords der giver impressions, men mangler på siden</p>
+                                  <h4 className="text-sm font-bold text-amber-900">Mulige emner (vurdér relevans)</h4>
+                                  <p className="text-xs text-amber-700">Mindst 10 visninger og ikke på siden – tilføj kun, hvis det passer til sortiment og målgruppe</p>
                                 </div>
                               </div>
                               <div className="space-y-2">
@@ -1649,7 +1675,7 @@ export default function SeoDashboard() {
                                         {row.impressions.toLocaleString()} impressions · {row.clicks.toLocaleString()} clicks · Pos {row.position.toFixed(1)}
                                       </div>
                                     </div>
-                                    <span className="px-2 py-1 bg-amber-100 text-amber-800 text-xs font-semibold rounded">Tilføj til tekst</span>
+                                    <span className="px-2 py-1 bg-amber-100 text-amber-800 text-xs font-semibold rounded">Vurdér</span>
                                   </div>
                                 ))}
                               </div>
