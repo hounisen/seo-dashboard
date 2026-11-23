@@ -1290,7 +1290,12 @@ export default function SeoDashboard() {
                           </div>
                         </div>
                         <div className="text-right text-sm text-gray-400">
-                          Nå <span className="font-semibold text-gray-700">70%</span> for at matche<br />gennemsnitlige konkurrenter
+                          {competitorAnalysis.length > 0 ? (
+                            <>Konkurrenter: gns. <span className="font-semibold text-gray-700">{Math.round(competitorAnalysis.reduce((a, c) => a + c.result.percentage, 0) / competitorAnalysis.length)}%</span><br />
+                            <span className="text-xs">{competitorAnalysis.length} analyserede side(r), samme on-page-score</span></>
+                          ) : (
+                            <span className="text-xs">Score er et hjælpemiddel – ingen fast måltærskel.<br />Tilføj konkurrent-URL'er for at sammenligne.</span>
+                          )}
                         </div>
                       </div>
                       <ProgressBar pct={pct} />
@@ -1481,7 +1486,12 @@ export default function SeoDashboard() {
                         >
                           <div>
                             <div className="text-xs font-bold tracking-wide uppercase text-gray-400 mb-1.5">{rec.label}</div>
-                            <StatusPill status={rec.status} />
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${rec.verdict === 'behold' ? 'bg-emerald-100 text-emerald-700' : rec.verdict === 'optimer' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
+                                {rec.verdict === 'behold' ? 'BEHOLD' : rec.verdict === 'optimer' ? 'OPTIMÉR' : 'MANUEL VURDERING'}
+                              </span>
+                              <StatusPill status={rec.status} />
+                            </div>
                           </div>
                           <span className="text-gray-300 text-lg font-light ml-2 flex-shrink-0">›</span>
                         </button>
