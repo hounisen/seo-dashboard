@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
-import { analyzeSeo, SeoInput, SeoResult, KeywordStatus } from '@/lib/seoEngine'
+import { analyzeSeo, SeoInput, SeoResult, KeywordStatus, containsKeyword, toPlainText } from '@/lib/seoEngine'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface FormState {
@@ -15,6 +15,7 @@ interface FormState {
   h1: string
   bodyContent: string
   structuredDataTypes: string[]
+  intentFit: '' | 'match' | 'partial' | 'mismatch'
 }
 
 interface GscData {
@@ -68,6 +69,7 @@ const DEFAULT_FORM: FormState = {
   h1: '',
   bodyContent: '',
   structuredDataTypes: [],
+  intentFit: '',
 }
 
 // ── Helper components ─────────────────────────────────────────────────────────
@@ -461,9 +463,11 @@ export default function SeoDashboard() {
       h1: form.h1,
       bodyContent: form.bodyContent,
       structuredDataTypes: form.structuredDataTypes,
+      gsc: gscData,
+      intentFit: form.intentFit,
     }
     setResult(analyzeSeo(input))
-  }, [form])
+  }, [form, gscData])
 
   // Recalculate originalResult when keywords or scraped snapshot changes
   useEffect(() => {
@@ -475,9 +479,10 @@ export default function SeoDashboard() {
       pageTitle: scraped.pageTitle, metaDescription: scraped.metaDescription,
       h1: scraped.h1, bodyContent: scraped.bodyContent,
       structuredDataTypes: form.structuredDataTypes,
+      gsc: gscData, intentFit: form.intentFit,
     }))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.targetKeyword, form.semanticKeywords, scraped, form.structuredDataTypes])
+  }, [form.targetKeyword, form.semanticKeywords, scraped, form.structuredDataTypes, gscData, form.intentFit])
 
   const updateForm = useCallback((key: keyof FormState, val: string) => {
     setForm(prev => ({ ...prev, [key]: val }))
@@ -714,7 +719,10 @@ export default function SeoDashboard() {
                     {pct > originalResult.percentage ? '▲' : '▼'} {Math.abs(pct - originalResult.percentage)}%
                   </span>
                 )}
-                <span className="text-gray-400 text-xs">SEO Score</span>
+                <span className="text-gray-400 text-xs">On-page</span>
+                {result.potentialScore !== null && (
+                  <span className="text-xs text-gray-500 ml-2"><span className="font-bold text-purple-600 tabular-nums">{result.potentialScore}%</span> potentiale</span>
+                )}
               </div>
               <button
                 onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
@@ -778,6 +786,7 @@ export default function SeoDashboard() {
                         bodyContent: '',
                         competitorUrls: '',
                         structuredDataTypes: [],
+                        intentFit: '',
                       })
                       setGscData([])
                       setGscFileName('')
@@ -927,6 +936,23 @@ export default function SeoDashboard() {
                   )}
                 </div>
 
+                {/* ── Søgeintention / B2B-match (manuel vurdering) ── */}
+                <div>
+                  <label className="text-xs font-semibold text-gray-500 block mb-2">
+                    Søgeintention / B2B-match <span className="text-gray-300">(din vurdering af SERP)</span>
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {([['match', 'Match'], ['partial', 'Delvist'], ['mismatch', 'Ikke match']] as const).map(([val, label]) => (
+                      <button key={val} type="button"
+                        onClick={() => setForm(prev => ({ ...prev, intentFit: prev.intentFit === val ? '' : val }))}
+                        className={`px-2 py-2 rounded-lg border text-xs font-medium transition-all ${form.intentFit === val ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-gray-200 bg-gray-50 text-gray-500 hover:bg-gray-100'}`}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1">Tjek top-10 for søgningen: er det B2B/kategorisider eller B2C? Påvirker SEO-potentialet.</p>
+                </div>
+
                 {/* ── Structured Data Checkboxes ── */}
                 <div>
                   <label className="text-xs font-semibold text-gray-500 block mb-2">
@@ -1065,7 +1091,7 @@ export default function SeoDashboard() {
               <>
                 {/* Score Ring */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 animate-fade-up">
-                  <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">SEO Score</p>
+                  <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">On-page kvalitet</p>
                   <div className="flex items-start gap-6">
                     <ScoreRing pct={pct} />
                     <div className="flex-1 min-w-0">
@@ -1094,6 +1120,19 @@ export default function SeoDashboard() {
                         <span className="text-xs text-gray-500">
                           <span className="font-semibold text-gray-700">{result.wordCount}</span> ord
                         </span>
+                      </div>
+                      <div className="mt-4 pt-4 border-t border-gray-100">
+                        <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-1">SEO-potentiale <span className="normal-case font-normal text-gray-400">(højere = mere at hente)</span></p>
+                        {result.potentialScore === null ? (
+                          <p className="text-xs text-gray-500">Upload en GSC-fil for at se potentialet. On-page-scoren ovenfor måler kun sidens kvalitet – ikke hvor meget trafik der er at hente.</p>
+                        ) : (
+                          <div>
+                            <div className="text-2xl font-extrabold text-purple-600 tabular-nums">{result.potentialScore}<span className="text-base text-gray-400 font-semibold">%</span></div>
+                            <ul className="mt-1 space-y-0.5">
+                              {result.potentialNotes.map((n, i) => (<li key={i} className="text-xs text-gray-500">• {n}</li>))}
+                            </ul>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1284,7 +1323,7 @@ export default function SeoDashboard() {
                     <table className="w-full text-sm min-w-[480px]">
                       <thead>
                         <tr className="border-b border-gray-100">
-                          {['Keyword', 'Status', 'Anbefalet', 'Nuværende'].map(h => (
+                          {['Keyword', 'Status', 'Vurdering', 'Nuværende'].map(h => (
                             <th key={h} className="text-left text-xs font-bold tracking-widest uppercase text-gray-400 pb-3 px-3">{h}</th>
                           ))}
                         </tr>
@@ -1294,7 +1333,7 @@ export default function SeoDashboard() {
                           <tr key={k.keyword} className="border-b border-gray-50 hover:bg-gray-50 transition">
                             <td className="py-3 px-3 font-medium text-gray-800">{k.keyword}</td>
                             <td className="py-3 px-3"><KwStatusTag status={k.status} /></td>
-                            <td className="py-3 px-3 text-gray-400 tabular-nums text-xs">{k.recommendedMin}–{k.recommendedMax}×</td>
+                            <td className="py-3 px-3 text-gray-400 tabular-nums text-xs">{k.note}</td>
                             <td className="py-3 px-3 text-gray-400 tabular-nums text-xs font-semibold">{k.currentCount}×</td>
                           </tr>
                         ))}
@@ -1319,8 +1358,8 @@ export default function SeoDashboard() {
                         </thead>
                         <tbody>
                           {gscData.slice(0, 10).map((row, i) => {
-                            const text = [form.pageTitle, form.metaDescription, form.h1, form.bodyContent].join(' ').toLowerCase()
-                            const onPage = text.includes(row.keyword.toLowerCase())
+                            const text = [form.pageTitle, form.metaDescription, form.h1, toPlainText(form.bodyContent)].join(' ')
+                            const onPage = containsKeyword(text, row.keyword)
                             return (
                               <tr key={i} className="border-b border-gray-50 hover:bg-gray-50 transition">
                                 <td className="py-3 px-3 font-medium text-gray-800">{row.keyword}</td>
@@ -1356,9 +1395,9 @@ export default function SeoDashboard() {
                     
                     {/* Low-hanging fruit - keywords not on page but getting impressions */}
                     {(() => {
-                      const text = [form.pageTitle, form.metaDescription, form.h1, form.bodyContent].join(' ').toLowerCase()
+                      const text = [form.pageTitle, form.metaDescription, form.h1, toPlainText(form.bodyContent)].join(' ')
                       const missingHighImpression = gscData
-                        .filter(row => !text.includes(row.keyword.toLowerCase()) && row.impressions > 0)
+                        .filter(row => !containsKeyword(text, row.keyword) && row.impressions > 0)
                         .sort((a, b) => b.impressions - a.impressions)
                         .slice(0, 5)
                       
