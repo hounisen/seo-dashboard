@@ -259,3 +259,25 @@ export function applyBriefGate<T extends { evidence: string; source: string; obs
   if (sug.length === 0) return { behold: true, beholdReason: gate.recommendBehold ? (gate.reason || 'Siden performer godt – behold eksisterende indhold.') : (data.beholdReason || 'Ingen fagligt begrundede ændringer.'), suggestions: [], warnings }
   return { behold: false, beholdReason: '', suggestions: sug, warnings }
 }
+
+// Forslag til en ANDEN URL end den analyserede må kun bygge på den indlæste sides egen tekst – aldrig på GSC-tal alene.
+//  - Et forslag med eksisterende tekst (current) beholdes kun, hvis teksten findes på den indlæste side.
+//  - Et forslag, hvis eneste dokumentation er GSC/Search Console-tal, nedgraderes til hypotese.
+const squash = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase()
+export function groundOtherUrl<T extends { evidence: string; source: string; observation: string; current: string; element: string }>(
+  data: { behold: boolean; beholdReason: string; suggestions: T[]; warnings: string[] },
+  page: { title: string; meta: string; h1: string; body: string },
+): { behold: boolean; beholdReason: string; suggestions: T[]; warnings: string[] } {
+  const hay = squash([page.title, page.meta, page.h1, page.body].join(' \n '))
+  const warnings = [...data.warnings]
+  let dropped = 0, downgraded = 0
+  const kept: T[] = []
+  for (const s of data.suggestions) {
+    if (s.current && s.current.trim() && hay.indexOf(squash(s.current)) < 0) { dropped++; continue }
+    const gscOnly = GSC_WORDS.test(`${s.observation} ${s.source}`) && !/\b(sidens tekst|siden|indhold|titel|meta|h1|tegn|overskrift)\b/i.test(s.source)
+    if (s.evidence === 'dokumenteret' && (gscOnly || !s.observation.trim())) { kept.push({ ...s, evidence: 'hypotese' }); downgraded++ } else kept.push(s)
+  }
+  if (dropped) warnings.push(`${dropped} forslag blev udeladt, fordi den eksisterende tekst ikke findes på den indlæste side.`)
+  if (downgraded) warnings.push(`${downgraded} forslag er nedgraderet til hypotese, fordi de ikke har dokumentation fra sidens egen tekst.`)
+  return { behold: data.behold, beholdReason: data.beholdReason, suggestions: kept, warnings }
+}

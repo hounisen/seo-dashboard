@@ -303,7 +303,7 @@ export type UrlKind = 'produkt' | 'kategori' | 'artikel' | 'ukendt'
 const UNIT = /^(\d+([.,]\d+)?|pct|procent|ml|cl|dl|l|ltr|liter|kg|g|mg|mm|cm|stk|pk|pakke|x|xl|xs|s|m)$/
 const ID_SEG = /^(p|id|sku)?[-_]?\d{3,}$/
 function segs(u: string): string[] { return normUrl(u).split('/').slice(1).filter(Boolean) }
-function lastMeaningful(u: string): string { const s = segs(u).filter(x => !ID_SEG.test(x)); return s[s.length - 1] ?? '' }
+export function lastMeaningful(u: string): string { const s = segs(u).filter(x => !ID_SEG.test(x)); return s[s.length - 1] ?? '' }
 function baseTokens(seg: string): string[] { return seg.split(/[-_+\s]+/).filter(t => t && !UNIT.test(t) && !/^\d+%$/.test(t)) }
 function variantTokens(seg: string): string[] { return seg.split(/[-_+\s]+/).filter(t => UNIT.test(t) || /^\d+%$/.test(t)) }
 

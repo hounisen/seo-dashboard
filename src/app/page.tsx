@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { analyzeSeo, SeoInput, SeoResult, KeywordStatus, containsKeyword, toPlainText, expectedCtr, normKw, KwStatus } from '@/lib/seoEngine'
 import { parseGscQueryPage, parseAhrefsUrls, buildPerformance, Performance, PeriodInfo, normUrl, OVERLAP_LABEL, GscPageRow, GscPageParse, AhrefsUrlRow, OverlapResult } from '@/lib/overlap'
 import { buildBrief } from '@/lib/suggestBrief'
+import { buildActionPlan, PlanEntry, ExaminedInfo } from '@/lib/actionPlan'
 import { SerpData, PageTypeInput, KIND_LABEL } from '@/lib/serpAnalysis'
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -579,7 +580,130 @@ function OverlapPanel({ overlap, gscDataNote }: { overlap: OverlapResult; gscDat
   )
 }
 
-function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped, stored, onStore, onPatch, onClear }: {
+const ACTION_STYLE: Record<string, string> = { 'BEHOLD': 'bg-emerald-100 text-emerald-700', 'OPTIMÉR': 'bg-blue-100 text-blue-700', 'UNDERSØG': 'bg-amber-100 text-amber-700', 'INGEN HANDLING': 'bg-gray-100 text-gray-600' }
+type WorkStatus = 'AFVENTER' | 'I GANG' | 'UDFØRT' | 'FRAVALGT'
+interface WorkEntry { status: WorkStatus; doneAt?: string; updatedAt: string }
+const WORK_KEY = 'seoActionStatus'
+function ActionPlanView({ plan, suggStore, open, setOpen, loading, errors, onLoad, work, onWork }: {
+  plan: ReturnType<typeof buildActionPlan>
+  suggStore: Record<string, SuggSet>
+  open: string
+  setOpen: (k: string) => void
+  loading: string
+  errors: Record<string, string>
+  onLoad: (e: PlanEntry) => void
+  work: Record<string, WorkEntry>
+  onWork: (key: string, w: WorkEntry) => void
+}) {
+  const n = (x: number) => x.toLocaleString('da-DK')
+  const slotTxt = (c: { clicks: number; impressions: number; position: number | null } | null) => c ? `${n(c.clicks)} klik · ${n(c.impressions)} eksp.${c.position ? ` · pos. ${c.position.toLocaleString('da-DK', { maximumFractionDigits: 1 })}` : ''}` : '–'
+  return (
+    <div data-testid="action-plan">
+      <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-1">SEO-handlingsplan</p>
+      {!plan.available ? (
+        <p className="text-xs bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 text-amber-700" data-testid="plan-unavailable">{plan.notes[0]}</p>
+      ) : (
+        <>
+          {plan.summary.length > 0 && (
+            <div data-testid="plan-summary" className="mb-3 rounded-xl border border-blue-100 bg-blue-50/50 px-3 py-2 text-xs text-gray-700">
+              <div className="font-bold text-blue-700 mb-1">Samlet anbefaling</div>
+              <ul className="space-y-0.5">{plan.summary.map((x, i) => <li key={i}>{x}</li>)}</ul>
+            </div>
+          )}
+          <p className="text-xs text-gray-500 mb-2">Prioriteret oversigt over den analyserede URL og de øvrige Hounisen-URL&apos;er i GSC- og Ahrefs-filerne. Aktuel periode: {plan.periods.current}{plan.periods.previous ? ` · sammenlignet med ${plan.periods.previous}` : ''}.</p>
+          <div className="space-y-2">
+            {plan.entries.map(e => {
+              const set = suggStore[suggKey(e.url)]
+              const isOpen = open === e.key
+              return (
+                <div key={e.key} data-testid="plan-row" data-url={e.url} className={`border rounded-xl ${e.isActive ? 'border-blue-300 bg-blue-50/30' : 'border-gray-200'}`}>
+                  <button onClick={() => setOpen(isOpen ? '' : e.key)} className="w-full text-left px-3 py-2.5" aria-expanded={isOpen}>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span data-testid="plan-action" className={`text-xs font-bold px-2 py-0.5 rounded-full ${ACTION_STYLE[e.action]}`}>{e.action}</span>
+                      <span className="text-xs text-gray-500">Prioritet: <b data-testid="plan-priority">{e.priority}</b></span>
+                      <span data-testid="plan-doc" className={`text-xs font-bold px-2 py-0.5 rounded-full ${e.documentation === 'verificeret' ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>{e.documentation}</span>
+                      {e.isActive && <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-blue-600 text-white">Analyseret URL</span>}
+                      {e.variantOfActive && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">produktvariant</span>}
+                    </div>
+                    <div className="text-sm font-semibold text-gray-800 mt-1">{e.topic} <span className="text-xs font-normal text-gray-400">({KIND_LABEL[e.kind as keyof typeof KIND_LABEL] ?? e.kind})</span></div>
+                    <div className="text-xs text-gray-400 break-all">{e.url}</div>
+                    <div className="text-xs text-gray-600 mt-1">Nu: {slotTxt(e.totals.cur ? { ...e.totals.cur, position: e.avgPosition.cur } : null)}{e.totals.prev ? ` · Før: ${slotTxt({ ...e.totals.prev, position: e.avgPosition.prev })}` : ''}</div>
+                    <div className="text-xs text-gray-700 mt-1" data-testid="plan-reason">{e.reason}</div>
+                    <div className="text-xs text-gray-700 mt-1"><b>Handling:</b> <span data-testid="plan-todo">{e.todo}</span> · Forventet betydning: <b data-testid="plan-significance">{e.significance}</b></div>
+                  </button>
+                  {(() => {
+                    const w = work[suggKey(e.url)] ?? { status: 'AFVENTER' as WorkStatus, updatedAt: '' }
+                    return (
+                      <div className="px-3 pb-2 flex flex-wrap items-center gap-2 text-xs" data-testid="plan-work">
+                        <label className="text-gray-500">Status</label>
+                        <select data-testid="plan-status" value={w.status} onChange={ev => { const st = ev.target.value as WorkStatus; onWork(suggKey(e.url), { status: st, doneAt: st === 'UDFØRT' ? (w.doneAt || new Date().toISOString().slice(0, 10)) : w.doneAt, updatedAt: new Date().toISOString() }) }} className="border border-gray-200 rounded-lg px-2 py-1">
+                          {(['AFVENTER', 'I GANG', 'UDFØRT', 'FRAVALGT'] as WorkStatus[]).map(x => <option key={x} value={x}>{x}</option>)}
+                        </select>
+                        {w.status === 'UDFØRT' && (<>
+                          <label className="text-gray-500">Udført (manuelt) den</label>
+                          <input data-testid="plan-done-date" type="date" value={w.doneAt ?? ''} onChange={ev => onWork(suggKey(e.url), { ...w, doneAt: ev.target.value, updatedAt: new Date().toISOString() })} className="border border-gray-200 rounded-lg px-2 py-1" />
+                          <span className="text-gray-400">Bruges til senere at sammenligne GSC-performance før og efter.</span>
+                        </>)}
+                      </div>
+                    )
+                  })()}
+                  {isOpen && (
+                    <div data-testid="plan-detail" className="px-3 pb-3 text-xs border-t border-gray-100 pt-2">
+                      <p className="text-gray-500 mb-2">{e.documentationNote}</p>
+                      {e.keywords.length > 0 ? (
+                        <table className="w-full text-xs mb-2"><thead><tr className="text-left text-gray-400"><th className="py-1 pr-2">Overlappende søgeord</th><th className="pr-2">Aktuel</th><th className="pr-2">Tidligere</th><th>Andre URL&apos;er</th></tr></thead>
+                          <tbody>{e.keywords.map(k => (
+                            <tr key={k.keyword} className="border-t border-gray-50 align-top"><td className="py-1 pr-2 font-medium text-gray-700">{k.keyword}{k.ahrefsShift ? <div className="font-normal text-gray-400">{k.ahrefsShift}</div> : null}</td><td className="pr-2">{slotTxt(k.cur)}</td><td className="pr-2">{slotTxt(k.prev)}</td><td>{k.sharedWith}</td></tr>
+                          ))}</tbody></table>
+                      ) : <p className="text-gray-400 mb-2">Ingen søgeord med væsentligt overlap til andre URL&apos;er.</p>}
+                      {e.isActive ? (
+                        <p className="text-gray-600">Konkrete tekstforslag til denne URL vises under handlingsplanen.</p>
+                      ) : set && (set.items.length > 0 || set.behold) ? (
+                        <div data-testid="plan-other-suggestions" className="space-y-2">
+                          <p className="text-gray-500">Forslag til denne URL gemmes separat og kan ikke anvendes i den aktuelle kladde. Intet er ændret på siden.</p>
+                          {set.behold && (set.behold.behold || set.behold.reason) && <p className="text-emerald-800 bg-emerald-50 rounded px-2 py-1">{set.behold.behold ? 'BEHOLD: ' : ''}{set.behold.reason}</p>}
+                          {set.items.map((it, i) => (
+                            <div key={i} data-testid="plan-other-item" className="border border-gray-200 rounded-lg p-2">
+                              <div className="font-bold uppercase text-gray-700">{it.element} <span className="font-normal normal-case text-gray-500">({it.evidence})</span></div>
+                              <div className="grid sm:grid-cols-2 gap-2 mt-1"><div><div className="text-gray-400">Nu</div><div className="whitespace-pre-wrap text-gray-600">{it.current || '(nyt)'}</div></div><div><div className="text-gray-400">Forslag</div><div className="whitespace-pre-wrap text-gray-800"><DiffText current={it.current} proposed={it.draft} /></div></div></div>
+                              {it.observation && <p className="mt-1 text-gray-600"><b>Observation:</b> {it.observation}</p>}
+                              <p className="text-gray-600"><b>Vurdering:</b> {it.judgement || it.reason}</p>
+                              <p className="text-gray-400">Grundlag: {it.source}</p>
+                            </div>
+                          ))}
+                          {set.warnings && set.warnings.length > 0 && <ul className="text-amber-700 list-disc ml-4">{set.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>}
+                        </div>
+                      ) : (
+                        <div>
+                          <p data-testid="plan-prelim" className="bg-amber-50 border border-amber-100 rounded px-2 py-1 text-amber-700">Foreløbig undersøgelsesanbefaling – sidens indhold er ikke undersøgt, så der vises ingen tekstændringer. Indlæs URL&apos;en for en supplerende analyse.</p>
+                        </div>
+                      )}
+                      {!e.isActive && (
+                        <div className="mt-2 flex items-center gap-3">
+                          <button data-testid="plan-load" onClick={() => onLoad(e)} disabled={loading !== ''} className="px-3 py-1.5 rounded-lg bg-blue-600 text-white font-semibold disabled:bg-gray-300">{loading === e.key ? 'Indlæser og analyserer…' : set && (set.items.length > 0 || set.behold) ? 'Indlæs igen og analysér' : 'Indlæs URL og analysér'}</button>
+                          <span className="text-gray-400">Henter siden (Firecrawl) og beder Claude om forslag baseret på sidens egen tekst.</span>
+                        </div>
+                      )}
+                      {errors[e.key] && <p data-testid="plan-error" className="mt-2 text-red-700 bg-red-50 border border-red-100 rounded px-2 py-1">{errors[e.key]}</p>}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+          {plan.hidden.length > 0 && (
+            <details data-testid="plan-hidden" className="mt-2 text-xs text-gray-500"><summary className="cursor-pointer">{plan.hidden.length} yderligere URL&apos;er med lavere relevans (grupperet – ikke analyseret)</summary>
+              <ul className="mt-1 space-y-0.5">{plan.hidden.map(h => <li key={h.key} className="break-all">{h.action} · {h.url} ({h.totals.cur ? `${n(h.totals.cur.clicks)} klik, ${n(h.totals.cur.impressions)} eksp.` : 'ingen GSC'})</li>)}</ul>
+            </details>
+          )}
+          <ul className="mt-2 text-xs text-gray-400 list-disc ml-4">{plan.notes.map((x, i) => <li key={i}>{x}</li>)}</ul>
+        </>
+      )}
+    </div>
+  )
+}
+
+function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped, stored, onStore, onPatch, onClear, suggStore, gscPages, gscPagesMeta, ahrefsUrls, gscValidationError, analyzeUrl }: {
   form: FormState
   setForm: React.Dispatch<React.SetStateAction<FormState>>
   result: SeoResult
@@ -590,6 +714,12 @@ function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped, store
   onStore: (key: string, set: SuggSet) => void
   onPatch: (key: string, fn: (cur: SuggSet | undefined) => SuggSet) => void
   onClear: (key: string) => void
+  suggStore: Record<string, SuggSet>
+  gscPages: GscPageRow[]
+  gscPagesMeta: (GscPageParse & { periodInfo?: PeriodInfo }) | undefined
+  ahrefsUrls: AhrefsUrlRow[]
+  gscValidationError: string
+  analyzeUrl: (url: string, c: { title: string; meta: string; h1: string; body: string }, keyword: string, pageType: PageTypeInput) => SeoResult
 }) {
   // Forslagene ligger i forælderen (og i localStorage), så de overlever faneskift – kun indlæsningstilstand er lokal
   const [loading, setLoading] = useState(false)
@@ -602,6 +732,76 @@ function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped, store
   const approved = kwStatus[normKw(form.targetKeyword)] === 'godkendt'
   const save = (next: SuggItem[]) => onPatch(key, cur => ({ url: form.url, ...cur, items: next, behold: cur?.behold ?? behold, meta: cur?.meta ?? meta }))
 
+  const makePayload = (res: SeoResult, brief: ReturnType<typeof buildBrief>, src: { url: string; pageType: string; targetKeyword: string; approved: boolean; title: string; meta: string; h1: string; body: string }, crossUrl: boolean) => ({
+    brief,
+    ...(crossUrl ? { crossUrl: true } : {}),
+    url: src.url, pageType: src.pageType, businessContext: form.businessContext,
+    targetKeyword: src.targetKeyword, keywordApproved: src.approved,
+    approvedKeywords: Object.entries(kwStatus).filter(([, v]) => v === 'godkendt').map(([k]) => k),
+    current: { title: src.title, meta: src.meta, h1: src.h1, body: src.body.slice(0, 6000) },
+    verdicts: res.recommendations.map(r => ({ id: r.id, verdict: r.verdict, kind: r.kind, observation: r.observation, evidence: r.evidence })),
+    analysisMode: res.analysisMode,
+    focus: res.focus.headline,
+    keywordAssessments: res.focus.candidates.map(c => ({ keyword: c.keyword, volume: c.volume, status: c.status, b2b: c.b2b.overall, basis: c.b2b.basis, role: c.role, roleReason: c.roleReason, criteria: c.b2b.criteria.map(x => ({ k: x.label, v: x.verdict })) })),
+    serp: Object.values(res.serpAnalyses).map(a => ({ keyword: a.keyword, dominant: a.dominant, intent: a.probableIntent, verdict: a.verdict, uncertain: a.uncertain, date: a.dataDate, topTitles: a.results.slice(0, 5).map(r => r.title) })),
+    gsc: { enough: res.potentialConfidence !== 'ingen', notes: res.potentialNotes },
+    overlap: res.overlap.available ? { summary: res.overlap.summary, sources: res.overlap.sources, keywords: res.overlap.keywords.slice(0, 8).map(k => ({ keyword: k.keyword, classification: k.classification, period: k.primaryPeriod, impressions: k.totalImpressions, urls: k.urls.map(u => ({ url: u.url, current: u.isCurrent, kind: u.kind })), switchEvidence: k.switchEvidence, uncertainty: k.uncertainty })) } : null,
+    performance: res.performance.status === 'ingen' ? null : { status: res.performance.status, error: res.performance.error, currentPeriod: res.performance.currentLabel, previousPeriod: res.performance.previousLabel, totals: res.performance.totals, keywords: res.performance.rows.slice(0, 10).map(r => ({ keyword: r.keyword, current: r.cur, previous: r.prev })) },
+    serpAvailable: Object.keys(serpMap).length > 0,
+  })
+
+  // Handlingsplan: én vurdering pr. URL. Undersøgt indhold = gemte forslag for URL'en.
+  const [planLoading, setPlanLoading] = useState('')
+  const [planError, setPlanError] = useState<Record<string, string>>({})
+  const [planOpen, setPlanOpen] = useState('')
+  const examined: Record<string, ExaminedInfo> = {}
+  Object.keys(suggStore).forEach(k => {
+    const set = suggStore[k]
+    if (!set || !set.url || !(set.items.length > 0 || set.behold?.behold)) return
+    examined[normUrl(set.url)] = { hasItems: set.items.length > 0, behold: set.behold ? !!set.behold.behold : null, reason: set.behold?.reason ?? '', itemCount: set.items.length }
+  })
+  const pageText = [form.pageTitle, form.metaDescription, form.h1, toPlainText(form.bodyContent)].join(' ')
+  const examinedSig = JSON.stringify(examined)
+  // Genbrug beregnet brief og plan, så faneskift og tastetryk ikke giver genberegning
+  const brief0 = useMemo(() => buildBrief(result, pageText), [result, pageText])
+  const plan = useMemo(() => buildActionPlan({
+    pageUrl: form.url, gscPages, periodInfo: gscPagesMeta?.periodInfo, validationError: gscValidationError || undefined, ahrefsUrls,
+    overlap: result.overlap, brief: brief0,
+    activeContentLoaded: !!form.pageTitle && form.bodyContent.trim().length > 0, examined,
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [form.url, gscPages, gscPagesMeta, gscValidationError, ahrefsUrls, result, brief0, form.pageTitle, form.bodyContent, examinedSig])
+  // Arbejdsstatus pr. handling (URL): gemmes i browseren og ændres kun manuelt – aldrig af, at et forslag anvendes i kladden
+  const [work, setWork] = useState<Record<string, WorkEntry>>({})
+  useEffect(() => { try { const r = localStorage.getItem(WORK_KEY); if (r) setWork(JSON.parse(r)) } catch { /* ingen */ } }, [])
+  const onWork = (k: string, w: WorkEntry) => setWork(prev => { const next = { ...prev, [k]: w }; try { localStorage.setItem(WORK_KEY, JSON.stringify(next)) } catch { /* ignorer */ } return next })
+  const loadOther = async (e: PlanEntry) => {
+    const setErr = (m: string) => setPlanError(p => ({ ...p, [e.key]: m }))
+    setPlanLoading(e.key); setErr('')
+    try {
+      const sr = await fetch('/api/scrape', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: e.url }) })
+      let sd: any = null
+      try { sd = await sr.json() } catch { /* ikke JSON */ }
+      if (!sd || !sr.ok || sd.error) { setErr(`Siden kunne ikke indlæses: ${sd?.error || `HTTP ${sr.status}`}. Der genereres ingen forslag ud fra GSC-tal alene.`); return }
+      const c = { title: String(sd.title || ''), meta: String(sd.description || ''), h1: String(sd.h1 || ''), body: String(sd.bodyContent || '') }
+      if (c.body.trim().length < 150 || !c.title.trim()) { setErr('Sidens indhold blev ikke indlæst tilstrækkeligt (titel eller brødtekst mangler). Der genereres ingen konkrete forslag ud fra GSC-tal alene.'); return }
+      const pt = (e.kind === 'ukendt' ? '' : e.kind) as PageTypeInput
+      const res = analyzeUrl(e.url, c, e.topKeyword, pt)
+      const brief = buildBrief(res, [c.title, c.meta, c.h1, toPlainText(c.body)].join(' '))
+      const r = await fetch('/api/suggest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(makePayload(res, brief, { url: e.url, pageType: pt, targetKeyword: e.topKeyword, approved: false, title: c.title, meta: c.meta, h1: c.h1, body: c.body }, true)) })
+      let d: any = null
+      try { d = await r.json() } catch { /* ikke JSON */ }
+      if (!d || !r.ok || d.error || d.textOnly) { setErr(d?.error || d?.message || `Uventet svar fra serveren (HTTP ${r.status}).`); return }
+      onStore(suggKey(e.url), {
+        url: e.url,
+        behold: { behold: !!d.behold, reason: d.beholdReason || '' },
+        items: (d.suggestions || []).slice(0, 3).map((x: Suggestion) => ({ ...x, state: 'ny' as const, draft: x.proposed })),
+        meta: `${d.model || ''} · ${d.generatedAt ? new Date(d.generatedAt).toLocaleString('da-DK') : ''}`,
+        warnings: d.warnings || [],
+      })
+    } catch { setErr('Netværksfejl: kunne ikke nå serveren. Resten af analysen er upåvirket.') }
+    finally { setPlanLoading('') }
+  }
+
   const generate = async () => {
     const hasWork = items.some(i => i.state !== 'ny' || i.draft !== i.proposed)
     if (hasWork && !confirm('Du har forslag med redigeringer, anvendte eller afviste forslag. "Generér nye forslag" erstatter dem alle. Fortsæt?')) return
@@ -609,22 +809,7 @@ function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped, store
     setLoading(true); setError(null)
     try {
       const brief = buildBrief(result, [form.pageTitle, form.metaDescription, form.h1, toPlainText(form.bodyContent)].join(' '))
-      const payload = {
-        brief,
-        url: form.url, pageType: form.pageType, businessContext: form.businessContext,
-        targetKeyword: form.targetKeyword, keywordApproved: approved,
-        approvedKeywords: Object.entries(kwStatus).filter(([, v]) => v === 'godkendt').map(([k]) => k),
-        current: { title: form.pageTitle, meta: form.metaDescription, h1: form.h1, body: form.bodyContent.slice(0, 6000) },
-        verdicts: result.recommendations.map(r => ({ id: r.id, verdict: r.verdict, kind: r.kind, observation: r.observation, evidence: r.evidence })),
-        analysisMode: result.analysisMode,
-        focus: result.focus.headline,
-        keywordAssessments: result.focus.candidates.map(c => ({ keyword: c.keyword, volume: c.volume, status: c.status, b2b: c.b2b.overall, basis: c.b2b.basis, role: c.role, roleReason: c.roleReason, criteria: c.b2b.criteria.map(x => ({ k: x.label, v: x.verdict })) })),
-        serp: Object.values(result.serpAnalyses).map(a => ({ keyword: a.keyword, dominant: a.dominant, intent: a.probableIntent, verdict: a.verdict, uncertain: a.uncertain, date: a.dataDate, topTitles: a.results.slice(0, 5).map(r => r.title) })),
-        gsc: { enough: result.potentialConfidence !== 'ingen', notes: result.potentialNotes },
-        overlap: result.overlap.available ? { summary: result.overlap.summary, sources: result.overlap.sources, keywords: result.overlap.keywords.slice(0, 8).map(k => ({ keyword: k.keyword, classification: k.classification, period: k.primaryPeriod, impressions: k.totalImpressions, urls: k.urls.map(u => ({ url: u.url, current: u.isCurrent, kind: u.kind })), switchEvidence: k.switchEvidence, uncertainty: k.uncertainty })) } : null,
-        performance: result.performance.status === 'ingen' ? null : { status: result.performance.status, error: result.performance.error, currentPeriod: result.performance.currentLabel, previousPeriod: result.performance.previousLabel, totals: result.performance.totals, keywords: result.performance.rows.slice(0, 10).map(r => ({ keyword: r.keyword, current: r.cur, previous: r.prev })) },
-        serpAvailable: Object.keys(serpMap).length > 0,
-      }
+      const payload = makePayload(result, brief, { url: form.url, pageType: form.pageType, targetKeyword: form.targetKeyword, approved, title: form.pageTitle, meta: form.metaDescription, h1: form.h1, body: form.bodyContent }, false)
       const res = await fetch('/api/suggest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       let d: any = null
       try { d = await res.json() } catch { /* ikke JSON */ }
@@ -671,32 +856,14 @@ function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped, store
 
   return (
     <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100" data-testid="suggest-panel">
-      <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-1">Tekstforslag</p>
+      <ActionPlanView plan={plan} suggStore={suggStore} open={planOpen} setOpen={setPlanOpen} loading={planLoading} errors={planError} onLoad={loadOther} work={work} onWork={onWork} />
+      <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-1 mt-6">Tekstforslag til den analyserede URL</p>
       <p className="text-xs text-gray-500 mb-3">Forslagene genereres kun, når du beder om det (Claude API), og gemmes pr. URL i denne browser, så de overlever faneskift og genindlæsning. Intet overskrives eller publiceres automatisk – anvendte forslag lægges i &quot;Rediger live&quot;-kladden, og den originale side er uændret. Maks. tre prioriterede forslag.</p>
       {!approved && <p className="text-xs bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 text-amber-700 mb-3">«{form.targetKeyword}» er ikke godkendt som SEO-søgeord. Forslag markeres derfor som foreløbige.</p>}
       <div className="flex flex-wrap items-center gap-3">
         <button onClick={generate} disabled={loading || !form.pageTitle} className="px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-semibold disabled:bg-gray-300">{loading ? 'Genererer…' : items.length || behold ? 'Generér nye forslag' : 'Generér forslag'}</button>
         {(items.length > 0 || behold || stored?.textAnswer) && <button onClick={() => { if (confirm('Slet de gemte forslag for denne URL?')) onClear(key) }} className="text-xs text-gray-400 hover:text-red-500">Slet gemte forslag</button>}
       </div>
-      {(() => {
-        const b = buildBrief(result, [form.pageTitle, form.metaDescription, form.h1, toPlainText(form.bodyContent)].join(' '))
-        const T: Record<string, string> = { fremgang: 'Fremgang', tilbagegang: 'Tilbagegang', blandet: 'Blandet', stabil: 'Stabil', ny: 'Ny synlighed', forsvundet: 'Forsvundet', 'for-faa-data': 'For få data' }
-        return (
-          <details data-testid="brief" className="mt-3 text-xs bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
-            <summary className="cursor-pointer font-semibold text-gray-600">Beslutningsgrundlag for forslagene {b.dataStatus === 'valideringsfejl' ? '(datavalideringsfejl)' : b.currentPeriod ? `(aktuel periode ${b.currentPeriod})` : '(ingen GSC-periode)'}</summary>
-            <p className="mt-2 text-gray-600" data-testid="brief-gate">{b.gate.reason}</p>
-            <ul className="mt-1 list-disc ml-4 text-gray-500">{b.summary.map((x, i) => <li key={i}>{x}</li>)}</ul>
-            {b.keywords.length > 0 && (
-              <ul className="mt-2 space-y-1">
-                {b.keywords.slice(0, 8).map(k => (
-                  <li key={k.keyword} data-testid="brief-keyword" className="text-gray-600"><b>{k.keyword}</b> – {T[k.trend]}{k.deltaClicks != null ? ` (klik ${k.deltaClicks > 0 ? '+' : ''}${k.deltaClicks}${k.deltaPosition != null ? `, placering ${k.deltaPosition > 0 ? '+' : ''}${k.deltaPosition}` : ''})` : ''}. {k.assessment}{k.ctrNote ? ` ${k.ctrNote}` : ''}</li>
-                ))}
-              </ul>
-            )}
-            <p className="mt-2 text-gray-400">{b.method}</p>
-          </details>
-        )
-      })()}
       {stored && <p className="text-xs text-gray-400 mt-2">Gemte forslag for: {stored.url || '(ingen URL angivet)'}</p>}
       {error && (
         <div className="mt-3 text-xs bg-red-50 border border-red-100 rounded-lg px-3 py-2 text-red-700" data-testid="suggest-error">
@@ -757,6 +924,32 @@ function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped, store
           </div>
         ))}
       </div>
+      {(() => {
+        const b = buildBrief(result, [form.pageTitle, form.metaDescription, form.h1, toPlainText(form.bodyContent)].join(' '))
+        const T: Record<string, string> = { fremgang: 'Fremgang', tilbagegang: 'Tilbagegang', blandet: 'Blandet', stabil: 'Stabil', ny: 'Ny synlighed', forsvundet: 'Forsvundet', 'for-faa-data': 'For få data' }
+        return (
+          <details data-testid="brief" className="mt-3 text-xs bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
+            <summary className="cursor-pointer font-semibold text-gray-600">Beslutningsgrundlag for forslagene {b.dataStatus === 'valideringsfejl' ? '(datavalideringsfejl)' : b.currentPeriod ? `(aktuel periode ${b.currentPeriod})` : '(ingen GSC-periode)'}</summary>
+            <p className="mt-2 text-gray-600" data-testid="brief-gate">{b.gate.reason}</p>
+            <ul className="mt-1 list-disc ml-4 text-gray-500">{b.summary.map((x, i) => <li key={i}>{x}</li>)}</ul>
+            {b.keywords.length > 0 && (
+              <ul className="mt-2 space-y-1">
+                {b.keywords.slice(0, 8).map(k => (
+                  <li key={k.keyword} data-testid="brief-keyword" className="text-gray-600"><b>{k.keyword}</b> – {T[k.trend]}{k.deltaClicks != null ? ` (klik ${k.deltaClicks > 0 ? '+' : ''}${k.deltaClicks}${k.deltaPosition != null ? `, placering ${k.deltaPosition > 0 ? '+' : ''}${k.deltaPosition}` : ''})` : ''}. {k.assessment}{k.ctrNote ? ` ${k.ctrNote}` : ''}</li>
+                ))}
+              </ul>
+            )}
+            <p className="mt-2 text-gray-400">{b.method}</p>
+            <details data-testid="brief-intent" className="mt-2"><summary className="cursor-pointer font-semibold text-gray-600">SERP, søgeintention og B2B-vurdering</summary>
+              <ul className="mt-1 list-disc ml-4 text-gray-500">
+                {result.focus.candidates.slice(0, 6).map(c => <li key={c.keyword}><b>{c.keyword}</b> – B2B: {c.b2b.overall}, rolle: {c.role}</li>)}
+                {Object.values(result.serpAnalyses).slice(0, 4).map(a => <li key={'s' + a.keyword}>SERP «{a.keyword}»: {a.probableIntent}{a.uncertain ? ' (usikkert)' : ''}</li>)}
+                {Object.keys(result.serpAnalyses).length === 0 && <li>Ingen SERP-analyse udført endnu.</li>}
+              </ul>
+            </details>
+          </details>
+        )
+      })()}
       {items.length > 0 && <p className="text-xs text-gray-400 mt-4">{meta}. Automatiske kontroller genberegnes i kladden, men en højere score er ikke bevis for bedre placeringer. Kontrollér altid produktfakta, certificeringer og leveringsløfter, før noget publiceres.</p>}
     </div>
   )
@@ -979,6 +1172,18 @@ export default function SeoDashboard() {
     }
     setResult(analyzeSeo(input))
   }, [form, gscData, kwOverview, kwStatus, serpMap, b2bOverride, sortimentOk, serpIssue, gscPages, gscPagesMeta, ahrefsUrls, gscValidationError])
+
+  // Analyse af en anden URL (til handlingsplanen) med samme regler og data som den aktive side
+  const analyzeOther = (url: string, c: { title: string; meta: string; h1: string; body: string }, keyword: string, pageType: PageTypeInput): SeoResult => {
+    const perf = buildPerformance(gscPages, gscPagesMeta?.periodInfo, url, gscValidationError || undefined)
+    return analyzeSeo({
+      url, competitorUrls: [], targetKeyword: keyword, semanticKeywords: [], pageTitle: c.title, metaDescription: c.meta, h1: c.h1, bodyContent: c.body,
+      structuredDataTypes: [], structuredDataVerified: false,
+      gsc: perf.status === 'ok' || perf.status === 'enkelt' ? perf.rows.filter(r => r.cur).map(r => ({ keyword: r.keyword, impressions: r.cur!.impressions, clicks: r.cur!.clicks, position: r.cur!.position ?? 0 })) : [],
+      intentFit: form.intentFit, businessContext: form.businessContext, keywordStatus: kwStatus, b2bOverride, sortimentConfirmed: sortimentOk, serpIssues: serpIssue, analysisMode: 'eksisterende', pageType, gscMeta: { url: form.gscUrl, period: form.gscPeriod }, serp: serpMap, gscPages, gscPagesMeta, ahrefsUrls, gscValidationError,
+      kwData: kwOverview.map(k => ({ keyword: k.keyword, volume: k.volume, difficulty: k.difficulty, intents: k.intents })),
+    } as SeoInput)
+  }
 
   // Recalculate originalResult when keywords or scraped snapshot changes
   useEffect(() => {
@@ -1764,9 +1969,9 @@ export default function SeoDashboard() {
                     ['editor', 'Rediger live'],
                     ['anbefalinger', 'Anbefalinger'],
                     ['keywords', 'Keywords'],
-                    ['forslag', 'Forslag'],
                     ...(competitorAnalysis.length > 0 ? [['konkurrent', 'Konkurrenter']] : []),
                     ...(gscData.length > 0 ? [['gsc', 'GSC-detaljer']] : []),
+                    ['forslag', 'Forslag'],
                   ] as [string, string][]).map(([id, label]) => (
                     <button key={id} onClick={() => setDashTab(id)}
                       className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition ${dashTab === id ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
@@ -1977,7 +2182,7 @@ export default function SeoDashboard() {
 
                 </>)}
                 {dashTab === 'forslag' && (<>
-                <SuggestPanel form={form} setForm={setForm} result={result} kwStatus={kwStatus} serpMap={serpMap} scraped={scraped} stored={suggStore[suggKey(form.url)]} onStore={storeSugg} onPatch={patchSugg} onClear={clearSugg} />
+                <SuggestPanel form={form} setForm={setForm} result={result} kwStatus={kwStatus} serpMap={serpMap} scraped={scraped} stored={suggStore[suggKey(form.url)]} onStore={storeSugg} onPatch={patchSugg} onClear={clearSugg} suggStore={suggStore} gscPages={gscPages} gscPagesMeta={gscPagesMeta} ahrefsUrls={ahrefsUrls} gscValidationError={gscValidationError} analyzeUrl={analyzeOther} />
                 </>)}
                 {dashTab === 'editor' && (<>
                 {/* Live Editor */}

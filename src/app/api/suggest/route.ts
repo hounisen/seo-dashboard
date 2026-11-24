@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { applyBriefGate } from '@/lib/suggestBrief'
+import { applyBriefGate, groundOtherUrl } from '@/lib/suggestBrief'
 import { SUGGEST_SCHEMA, parseSuggestionText, scrub } from '@/lib/suggestParse'
 
 // Genererer konkrete tekstforslag med Claude. Kaldes kun manuelt (knappen "Generér forslag").
@@ -30,6 +30,7 @@ Regler:
   6) CTR og placering er observationer; forventet CTR (ctrNote) er en hypotese baseret på en generisk benchmarkkurve. Angiv aldrig estimerede ekstra klik eller trafik som dokumenteret mulighed.
   7) Foreslå ikke nye afsnit eller tekst om emner, som siden allerede dækker tilstrækkeligt (keywords[].coverage 'dækket', eller fremgår af current.body).
   8) Højst tre forslag, hvert med element, current, proposed, placement, observation (fakta + periode), judgement og source. Er ingen ændring fagligt begrundet, svar behold=true.
+- Hvis crossUrl=true gælder forslagene en ANDEN Hounisen-URL end den, brugeren arbejder på. Her må forslag KUN bygge på den indlæste sides egen tekst (current): current skal være ordret tekst fra siden, og GSC-tal alene er aldrig dokumentation for en ændring. Er teksten fin, svar behold=true.
 - title ≈ 30–65 tegn, meta ≈ 120–160 tegn. Skriv naturligt dansk til B2B-målgruppen, ingen overdrivelser.
 Format: {"behold":boolean,"beholdReason":string,"suggestions":[{"element":...,"current":...,"proposed":...,"observation":...,"judgement":...,"evidence":...,"source":...,"placement":...}]}`
 
@@ -51,6 +52,10 @@ export async function POST(req: NextRequest) {
   if (!apiKey) return NextResponse.json({ ok: false, kind: 'konfiguration', error: 'Konfigurationsfejl: ANTHROPIC_API_KEY er ikke sat i Vercel (Settings → Environment Variables).' }, { status: 500 })
   let body: any
   try { body = await req.json() } catch { return NextResponse.json({ ok: false, kind: 'api', error: 'Ugyldig forespørgsel fra dashboardet.' }, { status: 400 }) }
+  if (body?.crossUrl) {
+    const c = body.current ?? {}
+    if (String(c.body ?? '').trim().length < 150 || !String(c.title ?? '').trim()) return NextResponse.json({ ok: false, kind: 'tomt', error: 'Sidens indhold er ikke indlæst (eller for kort) – der genereres ingen konkrete forslag til andre URL\'er ud fra GSC-tal alene.' }, { status: 422 })
+  }
   const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5'
   const user = `Her er data om siden (JSON). Giv forslag efter reglerne.\n\n${JSON.stringify(body).slice(0, 24000)}`
   const debug: Record<string, unknown> = { model }
@@ -95,7 +100,8 @@ export async function POST(req: NextRequest) {
     const text: string = (json?.content ?? []).filter((c: any) => c?.type === 'text' || c?.text).map((c: any) => c.text ?? '').join('')
     const outcome = parseSuggestionText(text, json?.stop_reason)
     if (outcome.ok) {
-      const gated = applyBriefGate(outcome.data, body?.brief)
+      let gated = applyBriefGate(outcome.data, body?.brief)
+      if (body?.crossUrl) gated = groundOtherUrl(gated as any, { title: String(body.current?.title ?? ''), meta: String(body.current?.meta ?? ''), h1: String(body.current?.h1 ?? ''), body: String(body.current?.body ?? '') }) as any
       debug.briefGate = body?.brief?.gate ? { allowPerformanceBased: body.brief.gate.allowPerformanceBased, recommendBehold: body.brief.gate.recommendBehold } : undefined
       return NextResponse.json({ ok: true, ...gated, model, generatedAt: new Date().toISOString(), debug })
     }
