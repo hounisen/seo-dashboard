@@ -86,7 +86,7 @@ export function parseGscQueryPage(sheets: SheetRaw[], fileName = ''): GscPagePar
       if (!r) continue
       const q = String(r[iQ] ?? '').trim(), pg = String(r[iP] ?? '').trim()
       if (!q || !pg) continue
-      for (const [lab, g] of groups) {
+      for (const [lab, g] of Array.from(groups.entries())) {
         const imp = g.impressions != null ? num(r[g.impressions]) : null
         const clk = g.clicks != null ? num(r[g.clicks]) : null
         if (imp == null && clk == null) continue
@@ -213,7 +213,7 @@ export function analyzeOverlap(args: {
 
   const out: OverlapKeyword[] = []
   let otherOverlap = 0
-  for (const [k, e] of byKw) {
+  for (const [k, e] of Array.from(byKw.entries())) {
     const urlMap = new Map<string, OverlapUrl>()
     const touch = (u: string, src: 'GSC' | 'Ahrefs', role?: string) => {
       const n = normUrl(u); if (!n) return null
@@ -239,14 +239,14 @@ export function analyzeOverlap(args: {
       for (const o of e.ah.otherUrls) touch(o, 'Ahrefs', 'Anden rangerende URL')
       if (e.ah.prevUrl && e.ah.currUrl && normUrl(e.ah.prevUrl) !== normUrl(e.ah.currUrl)) ahrefsChange = { prevUrl: e.ah.prevUrl, currUrl: e.ah.currUrl }
     }
-    const urls = [...urlMap.values()]
+    const urls = Array.from(urlMap.values())
     if (urls.length < 2) continue
     const involvesMe = urls.some(u => u.isCurrent)
     if (!involvesMe && !analysisKeys.has(k)) { otherOverlap++; continue }
     if (!involvesMe) { otherOverlap++; continue }
 
     // perioder og andele
-    const allPeriods = [...new Set(urls.flatMap(u => u.periods.map(p => p.period)))]
+    const allPeriods = Array.from(new Set(urls.flatMap(u => u.periods.map(p => p.period))))
     const totalsBy = (per: string) => urls.reduce((s, u) => s + (u.periods.find(p => p.period === per)?.impressions ?? 0), 0)
     for (const per of allPeriods) { const t = totalsBy(per); for (const u of urls) { const p = u.periods.find(q => q.period === per); if (p) p.share = t > 0 ? p.impressions / t : null } }
     const primary = allPeriods.slice().sort((a, b) => totalsBy(b) - totalsBy(a))[0] ?? ''
@@ -298,7 +298,7 @@ export function analyzeOverlap(args: {
   const rank: Record<OverlapClass, number> = { 'mulig-kannibalisering': 0, uhensigtsmaessigt: 1, legitimt: 2, begraenset: 3, utilstraekkeligt: 4, ingen: 5 }
   out.sort((a, b) => rank[a.classification] - rank[b.classification] || b.totalImpressions - a.totalImpressions)
 
-  const gscSrc = gsc.length ? { rows: gsc.length, periods: args.gscPeriod?.periods ?? [...new Set(gsc.map(r => r.period))], periodSource: args.gscPeriod?.periodSource ?? 'ukendt', urls: new Set(gsc.map(r => normUrl(r.page))).size, queries: new Set(gsc.map(r => normKeyword(r.query))).size } : null
+  const gscSrc = gsc.length ? { rows: gsc.length, periods: args.gscPeriod?.periods ?? Array.from(new Set(gsc.map(r => r.period))), periodSource: args.gscPeriod?.periodSource ?? 'ukendt', urls: new Set(gsc.map(r => normUrl(r.page))).size, queries: new Set(gsc.map(r => normKeyword(r.query))).size } : null
   const notes = [
     'Tallene er summer af rækkerne i den indlæste fil. GSC-eksporter har rækkegrænser og udelader anonymiserede søgninger, så de kan ikke bruges som komplette totaler for domænet eller en URL uden validering.',
     'Intet her er en anbefaling om sammenlægning, canonical eller redirect. Fælles søgeord alene er ikke grundlag for sådanne ændringer.',

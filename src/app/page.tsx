@@ -990,7 +990,7 @@ export default function SeoDashboard() {
     const me = normUrl(form.url)
     const mine = gscPages.filter(r => normUrl(r.page) === me)
     if (mine.length === 0) { setGscDataNote('Den analyserede URL findes ikke i GSC-filen – keyword-analysen bruger ikke disse tal.'); return }
-    const periods = [...new Set(mine.map(r => r.period))]
+    const periods = Array.from(new Set(mine.map(r => r.period)))
     const tot = (p: string) => mine.filter(r => r.period === p).reduce((a, r) => a + r.impressions, 0)
     const use = periods.slice().sort((a, b) => tot(b) - tot(a))[0]
     const rows = mine.filter(r => r.period === use).map(r => ({ keyword: r.query, impressions: r.impressions, clicks: r.clicks, position: r.position ?? 0 }))
@@ -1017,7 +1017,7 @@ export default function SeoDashboard() {
           const qp = parseGscQueryPage(allSheets, file.name)
           if (qp) {
             setGscPages(qp.rows); setGscPagesMeta(qp)
-            const pages = [...new Set(qp.rows.map(r => r.page))]
+            const pages = Array.from(new Set(qp.rows.map(r => r.page)))
             setForm(prev => {
               const mine = prev.url ? pages.find(pg => normUrl(pg) === normUrl(prev.url)) : undefined
               return { ...prev, gscUrl: prev.gscUrl || mine || '', gscPeriod: prev.gscPeriod || (qp.periodSource !== 'ukendt' ? qp.periods.filter(x => x !== 'ukendt').join(' / ') : '') }
@@ -1068,7 +1068,7 @@ export default function SeoDashboard() {
         const qpc = parseGscQueryPage([{ name: file.name, rows: grid }], file.name)
         if (qpc) {
           setGscPages(qpc.rows); setGscPagesMeta(qpc)
-          const pages = [...new Set(qpc.rows.map(r => r.page))]
+          const pages = Array.from(new Set(qpc.rows.map(r => r.page)))
           setForm(prev => {
             const mine = prev.url ? pages.find(pg => normUrl(pg) === normUrl(prev.url)) : undefined
             return { ...prev, gscUrl: prev.gscUrl || mine || '', gscPeriod: prev.gscPeriod || (qpc.periodSource !== 'ukendt' ? qpc.periods.filter(x => x !== 'ukendt').join(' / ') : '') }
