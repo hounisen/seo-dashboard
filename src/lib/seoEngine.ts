@@ -1,5 +1,6 @@
 // lib/seoEngine.ts
 // Regelbaseret beslutningsmotor – én fælles vurderingslogik til score, statusser og anbefalinger.
+import { analyzeOverlap, OverlapResult, GscPageRow, GscPageParse, AhrefsUrlRow, OVERLAP_LABEL } from './overlap'
 import { analyzeSerp, SerpAnalysis, SerpData, PageTypeInput, KIND_LABEL } from './serpAnalysis'
 
 export type KwStatus = 'afventer' | 'kandidat' | 'godkendt' | 'fravalgt'
@@ -21,6 +22,9 @@ export interface SeoInput {
   readabilityScore?: 'Høj' | 'Medium' | 'Lav'
   gsc?: GscRow[]
   gscMeta?: { url: string; period: string }
+  gscPages?: GscPageRow[]
+  gscPagesMeta?: GscPageParse
+  ahrefsUrls?: AhrefsUrlRow[]
   intentFit?: '' | 'match' | 'partial' | 'mismatch'
   businessContext?: string
   pageType?: PageTypeInput
@@ -66,6 +70,8 @@ export interface RecommendationItem {
   evidence: string
   meaning: string
   action: string
+  // problem = dokumenteret fejl, redaktionel = forbedringsmulighed, laengde = afvigelse fra anbefalet tegnantal
+  kind?: 'problem' | 'redaktionel' | 'laengde'
 }
 
 export type CriterionVerdict = 'match' | 'delvist' | 'ikke' | 'ikke-vurderet' | 'ikke-verificeret'
@@ -94,6 +100,7 @@ export interface FocusCandidate {
   role: KwRole
   roleReason: string
   provisional: boolean
+  alternativeUrl?: string | null
   serpState: SerpState
   serp: { verdict: SerpAnalysis['verdict']; uncertain: boolean; summary: string } | null
   onPage: boolean
@@ -157,6 +164,7 @@ export interface SeoResult {
   relevanceFormula: string
   coverage: { items: CoverageItem[]; done: number; total: number }
   serpAnalyses: Record<string, SerpAnalysis>
+  overlap: OverlapResult
   focus: FocusResult
   analysisMode: 'ny' | 'eksisterende'
 }
@@ -383,11 +391,15 @@ function assessB2B(
   if (serpOk && pageType !== '' && a!.compatibleShare !== null) {
     const d = a!.compatibleShare, adj = a!.adjacentShare ?? 0
     const pct = (x: number) => `${Math.round(x * 100)} %`
-    const v: CriterionVerdict = d >= 0.5 ? 'match' : d + adj >= 0.3 ? 'delvist' : 'ikke'
-    const base = `Direkte samme sidetype som din side (${pageType}): ${pct(d)}. Nærliggende sidetyper med delvist samme funktion: ${pct(adj)}.`
+    let v: CriterionVerdict = d >= 0.5 ? 'match' : d + adj >= 0.3 ? 'delvist' : 'ikke'
+    const soft = !!a!.softIntent
+    if (v === 'ikke' && soft) v = 'delvist' // informativ/blandet intention giver aldrig automatisk «ikke»
+    const alt = a!.ownOtherUrls?.[0]
+    const altNote = alt && a!.ownRank == null ? ` En anden eksisterende URL fra samme domæne rangerer i SERP (#${alt.position}: ${alt.url}) – vurdér, om den er en bedre destination.` : ''
+    const base = `Direkte samme sidetype som din side (${pageType}): ${pct(d)}. Nærliggende sidetyper med delvist samme funktion: ${pct(adj)}.${soft ? ' Søgeintentionen er informativ eller blandet.' : ''}`
     const why = v === 'match' ? ' Flertallet af resultaterne opfylder samme funktion som din side.'
-      : v === 'delvist' ? (pageType === 'branche' ? ' En branchelandingpage har ikke automatisk samme funktion som kategorisider, produktlister eller forsider – vurdér selv, om din side kan opfylde samme behov.' : ' Kun delvist samme funktion – vurdér selv.')
-      : ' Søgningen passer sandsynligvis bedre til en anden side, fx en mere specifik kategori eller produktside.'
+      : v === 'delvist' ? (soft ? ' Siden kan muligvis dække en del af behovet – SERP er ikke bevis for, at søgeordet hører til en anden side.' : pageType === 'branche' ? ' En branchelandingpage har ikke automatisk samme funktion som kategorisider, produktlister eller forsider – vurdér selv, om din side kan opfylde samme behov.' : ' Kun delvist samme funktion – vurdér selv.') + altNote
+      : ' Andre sidetyper dominerer SERP. Det er ikke i sig selv bevis for, at søgeordet hører til en anden side – vurdér, om denne side kan dække en del af behovet.' + altNote
     lan = { key: 'landingsside', label: 'Landingssidematch', verdict: v, note: base + why }
   } else lan = { key: 'landingsside', label: 'Landingssidematch', verdict: NV, note: pageType === '' ? 'Angiv sidetype for at vurdere match.' : noSerp }
   crit.push(lan)
@@ -444,7 +456,7 @@ function computeFocus(
       keyword: k, volume, kd: d ? d.difficulty : null, intents: d ? d.intents : '', context, status,
       suggested: 'afventer' as KwStatus, rationale: '', role: 'afventer' as KwRole, roleReason: '', provisional: false, serpState,
       serp: a ? { verdict: a.verdict, uncertain: a.uncertain, summary: serpSummary(a) } : null,
-      b2b, onPage: containsKeyword(text, k),
+      b2b, onPage: containsKeyword(text, k), alternativeUrl: a?.ownOtherUrls?.[0]?.url ?? null,
     }
   })
 
@@ -456,11 +468,12 @@ function computeFocus(
     if (c.status === 'fravalgt') { c.role = 'fravaelg'; c.roleReason = 'Fravalgt af dig.' }
     else if (o === 'IKKE VURDERET') { c.role = 'afventer'; c.roleReason = 'For lidt grundlag til en anbefaling' + (sevenSerp(c) ? '.' : ' – analysér SERP.') }
     else if (o === 'IKKE MATCH') { c.role = 'fravaelg'; c.roleReason = c.b2b.overridden ? 'Du har vurderet søgeordet som ikke match.' : 'Mindst ét grundkriterium (målgruppe, sortiment eller intention) er ikke match.' }
-    else if (land === 'ikke') { c.role = 'anden-side'; c.roleReason = 'Relevant søgning, men sidetypen i SERP passer ikke til denne side. Udvid ikke denne side – vurdér en mere specifik kategori/produktside eller et internt link.' }
+    else if (land === 'ikke' && c.alternativeUrl) { c.role = 'anden-side'; c.roleReason = `Anden eksisterende URL kan være bedre: ${c.alternativeUrl} rangerer i SERP, og andre sidetyper end din dominerer. Vurdér selv – ingen ny side anbefales ud fra SERP alene.` }
+    else if (land === 'ikke') { c.role = 'sekundaer'; c.roleReason = 'Andre sidetyper dominerer SERP. Det er ikke dokumentation for, at søgeordet hører til en anden side – vurdér, om denne side kan dække en del af behovet. Indgår ikke som primær kandidat.' }
     else if (!sevenSerp(c)) { c.role = 'afventer'; c.roleReason = 'Foreløbigt estimat – analysér SERP, før søgeordet kan anbefales.' }
     else { c.role = 'sekundaer'; c.roleReason = `${o} ${c.b2b.basis === 'serp' ? 'understøttet af SERP' : 'med usikker SERP-klassifikation'}.` }
   }
-  const pool = candidates.filter(c => c.role === 'sekundaer' && c.b2b.basis === 'serp' && ((c.volume ?? 0) > 0 || c.status === 'godkendt'))
+  const pool = candidates.filter(c => c.role === 'sekundaer' && c.b2b.criteria.find(x => x.key === 'landingsside')!.verdict !== 'ikke' && c.b2b.basis === 'serp' && ((c.volume ?? 0) > 0 || c.status === 'godkendt'))
   pool.sort((x, y) => matchScore(y.b2b) - matchScore(x.b2b) || (statusMap[normKw(y.keyword)] === 'godkendt' ? 1 : 0) - (statusMap[normKw(x.keyword)] === 'godkendt' ? 1 : 0) || (y.volume ?? 0) - (x.volume ?? 0))
   const best = pool[0]
   const STATE_LABEL: Record<SerpState, string> = { 'ikke-analyseret': 'SERP ikke analyseret', ok: 'SERP analyseret', tom: 'Ahrefs gav ingen SERP-resultater', utilgaengelig: 'SERP-data utilgængelige', fejl: 'SERP-kald fejlede' }
@@ -494,7 +507,7 @@ function computeFocus(
     const drop = candidates.filter(c => c.role === 'fravaelg').map(c => `«${c.keyword}»`)
     const parts = [`${best.roleReason}`]
     if (sec.length) parts.push(`Sekundære: ${sec.join(', ')}.`)
-    if (other.length) parts.push(`Bedre til en anden side: ${other.join(', ')}.`)
+    if (other.length) parts.push(`Anden eksisterende URL kan være bedre: ${other.join(', ')}.`)
     if (drop.length) parts.push(`Anbefales fravalgt: ${drop.join(', ')}.`)
     if (!comparable) parts.push(`Kan endnu ikke sammenlignes: ${uncompared.map(c => `«${c.keyword}» (${STATE_LABEL[c.serpState]})`).join(', ')}.`)
     parts.push('Intet er godkendt – status ændres kun af dig.')
@@ -514,14 +527,24 @@ function computeFocus(
 // ── Hjælpere til anbefalinger ────────────────────────────────────────────────────────────────
 function rec(
   id: string, label: string, verdict: Verdict, status: RecommendationItem['status'], statusLabel: string,
-  observation: string, evidence: string, meaning: string, action: string,
+  observation: string, evidence: string, meaning: string, action: string, kind?: RecommendationItem['kind'],
 ): RecommendationItem {
   const detail = `<b>Dokumenteret observation:</b> ${observation}\n<b>Kilde/dokumentation:</b> ${evidence}\n<b>Faglig vurdering:</b> ${meaning}\n<b>Anbefalet handling:</b> ${action}`
-  return { id, verdict, label, status, statusLabel, detail, observation, evidence, meaning, action }
+  return { id, verdict, label, status, statusLabel, detail, observation, evidence, meaning, action, ...(kind ? { kind } : {}) }
 }
 
 const VERDICT_LABEL: Record<Verdict, string> = { behold: 'Behold', optimer: 'Optimér', manuel: 'Manuel vurdering', 'ikke-verificeret': 'Ikke verificeret' }
 const VERDICT_STATUS: Record<Verdict, RecommendationItem['status']> = { behold: 'ok', optimer: 'warn', manuel: 'warn', 'ikke-verificeret': 'neutral' }
+
+// Gradueret længdevurdering: god = inden for intervallet, mindre = inden for tolerancen, afvigende = uden for.
+export interface LengthGrade { state: 'mangler' | 'god' | 'mindre' | 'afvigende'; dev: number; earned: number }
+export function gradeLength(len: number, min: number, max: number, tol: number, maxPts: number): LengthGrade {
+  if (len === 0) return { state: 'mangler', dev: min, earned: 0 }
+  if (len >= min && len <= max) return { state: 'god', dev: 0, earned: maxPts }
+  const dev = len < min ? min - len : len - max
+  if (dev <= tol) return { state: 'mindre', dev, earned: Math.max(Math.round(maxPts * (1 - 0.5 * dev / tol)), Math.round(maxPts / 2)) }
+  return { state: 'afvigende', dev, earned: Math.max(0, Math.round(maxPts * 0.5 * (1 - (dev - tol) / (2 * tol)))) }
+}
 
 function firstSegment(t: string): string {
   return t.split(/\s[|–—-]\s|\|/)[0].trim()
@@ -557,7 +580,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   const serpAnalyses: Record<string, SerpAnalysis> = {}
   // Kun SERP-målinger for denne analyses egne søgeord indgår – cachede målinger fra andre sider ignoreres
   const currentKeys = new Set([input.targetKeyword, ...input.semanticKeywords].filter(Boolean).map(normKw))
-  for (const [k, d] of Object.entries(input.serp ?? {})) if (currentKeys.has(normKw(k))) serpAnalyses[normKw(k)] = analyzeSerp(d, pageType)
+  for (const [k, d] of Object.entries(input.serp ?? {})) if (currentKeys.has(normKw(k))) serpAnalyses[normKw(k)] = analyzeSerp(d, pageType, input.url)
 
   const focus = computeFocus(input, text, serpAnalyses)
 
@@ -570,8 +593,11 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   // ── Målte facts ─────────────────────────────────────────────────────────
   const title = input.pageTitle
   const meta = input.metaDescription
-  const titleGoodLength = title.length >= 30 && title.length <= 65
-  const metaGoodLength = meta.length >= 120 && meta.length <= 160
+  const titleLen = gradeLength(title.length, 30, 65, 5, 12)
+  const metaLen = gradeLength(meta.length, 120, 160, 15, 12)
+  const titleGoodLength = titleLen.state === 'god' || titleLen.state === 'mindre'
+  const metaGoodLength = metaLen.state === 'god' || metaLen.state === 'mindre'
+  const lenNote = (g: LengthGrade, len: number, min: number, max: number) => g.state === 'mindre' ? ` Mindre afvigelse fra anbefalet længde (${len} tegn, anbefalet ${min}–${max}) – ikke et dokumenteret problem; kun relevant, hvis teksten alligevel redigeres.` : ''
   const h1Present = input.h1.length > 0
   const h1Brand = /\s\|\s|®/.test(input.h1)
   const titleHasKw = containsKeyword(title, input.targetKeyword)
@@ -605,13 +631,13 @@ export function analyzeSeo(input: SeoInput): SeoResult {
 
   // Title
   if (!title) {
-    recs.push(rec('title', 'Title Tag', 'optimer', 'error', 'Optimér', 'Siden har ingen title.', 'Målt i den scrapede side.', 'Uden title vælger Google selv en titel, og brugeren får intet budskab i søgeresultatet.', 'Skriv en title på 30–65 tegn, der beskriver sidens indhold.'))
-  } else if (!titleGoodLength) {
-    recs.push(rec('title', 'Title Tag', 'optimer', 'warn', 'Optimér', `Title er ${title.length} tegn (anbefalet 30–65).`, 'Målt tegnantal i den scrapede/redigerede title.', title.length > 65 ? 'Lange titler afkortes i søgeresultatet.' : 'Meget korte titler udnytter ikke pladsen til at beskrive indholdet.', title.length > 65 ? 'Forkort titlen, så vigtigste budskab står først.' : 'Udvid titlen med det, der præcist beskriver siden.'))
+    recs.push(rec('title', 'Title Tag', 'optimer', 'error', 'Optimér', 'Siden har ingen title.', 'Målt i den scrapede side.', 'Uden title vælger Google selv en titel, og brugeren får intet budskab i søgeresultatet.', 'Skriv en title på 30–65 tegn, der beskriver sidens indhold.', 'problem'))
+  } else if (titleLen.state === 'afvigende') {
+    recs.push(rec('title', 'Title Tag', 'optimer', 'warn', 'Optimér', `Title er ${title.length} tegn (anbefalet 30–65).`, 'Målt tegnantal i den scrapede/redigerede title.', title.length > 65 ? 'Lange titler afkortes i søgeresultatet.' : 'Meget korte titler udnytter ikke pladsen til at beskrive indholdet.', title.length > 65 ? 'Forkort titlen, så vigtigste budskab står først.' : 'Udvid titlen med det, der præcist beskriver siden.', 'laengde'))
   } else if (kwActive && !titleHasKw) {
-    recs.push(rec('title', 'Title Tag', 'optimer', 'warn', 'Optimér', `Det godkendte søgeord «${input.targetKeyword}» står ikke i titlen.`, 'Du har godkendt søgeordet; tekstmatch i titlen er målt.', 'Titlen er det tydeligste signal om, hvad siden handler om.', 'Overvej at placere søgeordet (eller en naturlig variant) tidligt i titlen – uden at gøre den unaturlig.'))
+    recs.push(rec('title', 'Title Tag', 'optimer', 'warn', 'Optimér', `Det godkendte søgeord «${input.targetKeyword}» står ikke i titlen.`, 'Du har godkendt søgeordet; tekstmatch i titlen er målt.', 'Titlen er det tydeligste signal om, hvad siden handler om.', 'Overvej at placere søgeordet (eller en naturlig variant) tidligt i titlen – uden at gøre den unaturlig.', 'redaktionel'))
   } else if (titleConsistent) {
-    recs.push(rec('title', 'Title Tag', 'behold', 'ok', 'Behold', `Titlen er ${title.length} tegn og beskriver sidens emne.`, `Titlens ord (${titleCons.hit} af ${titleCons.total}) genfindes i H1/brødtekst.${gscGood ? gscLine : ''}${unapprovedNote}`, 'Titlen matcher sidens faktiske indhold og har passende længde.', 'Behold titlen. Der er ingen dokumenteret grund til at ændre den.'))
+    recs.push(rec('title', 'Title Tag', 'behold', 'ok', 'Behold', `Titlen er ${title.length} tegn og beskriver sidens emne.`, `Titlens ord (${titleCons.hit} af ${titleCons.total}) genfindes i H1/brødtekst.${gscGood ? gscLine : ''}${unapprovedNote}`, 'Titlen matcher sidens faktiske indhold og har passende længde.' + lenNote(titleLen, title.length, 30, 65), 'Behold titlen. Der er ingen dokumenteret grund til at ændre den.'))
   } else {
     recs.push(rec('title', 'Title Tag', 'manuel', 'warn', 'Manuel vurdering', 'Titlens ord genfindes kun delvist i H1/brødtekst.', `Kun ${titleCons.hit} af ${titleCons.total} betydende ord i titlen findes på siden.${unapprovedNote}`, 'Det kan være bevidst (fx brand/formål), men kan også tyde på, at titel og indhold ikke hænger sammen.', 'Vurdér selv, om titlen afspejler sidens indhold og formål.'))
   }
@@ -620,7 +646,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   if (!h1Present) {
     recs.push(rec('h1', 'H1', 'optimer', 'error', 'Optimér', 'Siden har ingen H1.', 'Ingen H1 fundet i det scrapede indhold.', 'H1 giver brugere og søgemaskiner et tydeligt emnesignal.', 'Tilføj én H1, der beskriver sidens emne.'))
   } else if (h1Brand) {
-    recs.push(rec('h1', 'H1', 'optimer', 'warn', 'Optimér', `H1 indeholder brandnavn eller separator: «${input.h1}».`, 'Målt i den scrapede H1.', 'H1 bør alene beskrive sidens emne; brand hører til i title.', 'Fjern brandnavn/separator fra H1.'))
+    recs.push(rec('h1', 'H1', 'optimer', 'warn', 'Optimér', `H1 indeholder brandnavn eller separator: «${input.h1}».`, 'Målt i den scrapede H1.', 'H1 bør alene beskrive sidens emne; brand hører til i title.', 'Fjern brandnavn/separator fra H1.', 'problem'))
   } else if (kwActive && !h1HasKw) {
     recs.push(rec('h1', 'H1', 'optimer', 'warn', 'Optimér', `Det godkendte søgeord «${input.targetKeyword}» står ikke i H1.`, 'Du har godkendt søgeordet; tekstmatch i H1 er målt.', 'H1 bør afspejle det, siden skal ramme.', 'Overvej en H1, der naturligt indeholder søgeordet eller en variant.'))
   } else {
@@ -654,13 +680,13 @@ export function analyzeSeo(input: SeoInput): SeoResult {
 
   // Meta
   if (!meta) {
-    recs.push(rec('meta', 'Meta Description', 'optimer', 'error', 'Optimér', 'Siden har ingen meta description.', 'Ingen meta description fundet.', 'Google vælger selv et uddrag, som sjældent er optimalt.', 'Skriv en beskrivelse på 120–160 tegn, der forklarer, hvad brugeren finder.'))
-  } else if (!metaGoodLength) {
-    recs.push(rec('meta', 'Meta Description', 'optimer', 'warn', 'Optimér', `Meta description er ${meta.length} tegn (anbefalet 120–160).`, 'Målt tegnantal.', 'Længden påvirker, om teksten afkortes. Google vælger selv, hvilket snippet der vises, så effekten på CTR kan ikke garanteres.', meta.length > 160 ? 'Forkort beskrivelsen.' : 'Udvid beskrivelsen med en konkret fordel.'))
+    recs.push(rec('meta', 'Meta Description', 'optimer', 'error', 'Optimér', 'Siden har ingen meta description.', 'Ingen meta description fundet.', 'Google vælger selv et uddrag, som sjældent er optimalt.', 'Skriv en beskrivelse på 120–160 tegn, der forklarer, hvad brugeren finder.', 'problem'))
+  } else if (metaLen.state === 'afvigende') {
+    recs.push(rec('meta', 'Meta Description', 'optimer', 'warn', 'Optimér', `Meta description er ${meta.length} tegn (anbefalet 120–160).`, 'Målt tegnantal.', 'Længden påvirker, om teksten afkortes. Google vælger selv, hvilket snippet der vises, så effekten på CTR kan ikke garanteres.', meta.length > 160 ? 'Forkort beskrivelsen.' : 'Udvid beskrivelsen med en konkret fordel.', 'laengde'))
   } else if (kwActive && !metaHasKw) {
-    recs.push(rec('meta', 'Meta Description', 'optimer', 'warn', 'Optimér', `Det godkendte søgeord «${input.targetKeyword}» står ikke i meta description.`, 'Du har godkendt søgeordet; tekstmatch i meta er målt.', 'Fremhævede søgeord kan gøre uddraget mere relevant – men Google kan vælge et andet snippet.', 'Overvej at nævne søgeordet naturligt.'))
+    recs.push(rec('meta', 'Meta Description', 'optimer', 'warn', 'Optimér', `Det godkendte søgeord «${input.targetKeyword}» står ikke i meta description.`, 'Du har godkendt søgeordet; tekstmatch i meta er målt.', 'Fremhævede søgeord kan gøre uddraget mere relevant – men Google kan vælge et andet snippet.', 'Overvej at nævne søgeordet naturligt.', 'redaktionel'))
   } else if (metaConsistent) {
-    recs.push(rec('meta', 'Meta Description', 'behold', 'ok', 'Behold', `Meta description er ${meta.length} tegn og beskriver siden.`, `Beskrivelsens ord (${metaCons.hit} af ${metaCons.total}) genfindes på siden.${gscGood ? gscLine : ''}${unapprovedNote}`, 'Beskrivelsen er relevant og har passende længde. Google vælger selv snippet, så effekt på CTR kan ikke garanteres.', 'Behold meta description.'))
+    recs.push(rec('meta', 'Meta Description', 'behold', 'ok', 'Behold', `Meta description er ${meta.length} tegn og beskriver siden.`, `Beskrivelsens ord (${metaCons.hit} af ${metaCons.total}) genfindes på siden.${gscGood ? gscLine : ''}${unapprovedNote}`, 'Beskrivelsen er relevant og har passende længde. Google vælger selv snippet, så effekt på CTR kan ikke garanteres.' + lenNote(metaLen, meta.length, 120, 160), 'Behold meta description. Ændr den ikke alene for at nå et højere score.'))
   } else {
     recs.push(rec('meta', 'Meta Description', 'manuel', 'warn', 'Manuel vurdering', 'Meta descriptions ord genfindes kun delvist på siden.', `Kun ${metaCons.hit} af ${metaCons.total} betydende ord findes på siden.${unapprovedNote}`, 'Beskrivelsen lover måske noget andet end siden indeholder.', 'Vurdér selv, om beskrivelsen passer til sidens indhold.'))
   }
@@ -676,6 +702,20 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     : sdActive
       ? rec('structured-data', 'Structured Data', 'ikke-verificeret', 'neutral', `Manuelt oplyst: ${sdTypes.join(', ')}`, `Du har manuelt oplyst: ${sdTypes.join(', ')}. Markup er ikke verificeret.`, 'Oplyst manuelt af dig – værktøjet læser ikke sidens markup, og oplysningen giver ingen point.', 'Manuelt oplyst markup kan være ugyldigt eller mangle på siden.', 'Verificér i Rich Results Test (https://search.google.com/test/rich-results), og bekræft i formularen.')
       : rec('structured-data', 'Structured Data', 'ikke-verificeret', 'neutral', 'Ikke verificeret', 'Sidens markup er ikke undersøgt.', 'Værktøjet læser ikke sidens markup.', 'Der kan hverken konkluderes fejl eller mangler.', 'Tjek i Rich Results Test og markér de typer, siden har.'))
+
+  // URL-overlap / mulig kannibalisering (påvirker aldrig score)
+  const serpKinds: Record<string, string> = {}
+  for (const [k, a] of Object.entries(serpAnalyses)) if (a.status === 'ok') serpKinds[k] = KIND_LABEL[a.dominant].toLowerCase()
+  const overlap = analyzeOverlap({ pageUrl: input.url, gscPages: input.gscPages, gscPeriod: input.gscPagesMeta, ahrefsUrls: input.ahrefsUrls, keywords: [input.targetKeyword, ...input.semanticKeywords], serpKinds })
+  if (overlap.available) {
+    const serious = overlap.keywords.filter(x => x.classification === 'mulig-kannibalisering' || x.classification === 'uhensigtsmaessigt')
+    const legit = overlap.keywords.filter(x => x.classification === 'legitimt')
+    const per = overlap.sources.gsc ? overlap.sources.gsc.periods.join(', ') : 'ingen GSC-periode'
+    const obs = `${overlap.summary} Periode: ${per}. Kilde: ${[overlap.sources.gsc ? 'GSC (forespørgsel × side)' : '', overlap.sources.ahrefs ? 'Ahrefs (rangerende URL\'er)' : ''].filter(Boolean).join(' + ')}.`
+    if (serious.length > 0) recs.push(rec('overlap', 'URL-overlap', 'manuel', 'warn', 'Manuel vurdering', obs, 'Tal fra de indlæste filer; sidernes indhold og intention er ikke læst.', 'Fælles søgeord er ikke i sig selv et problem. Om overlappet skader, afhænger af sidernes intention og produktmatch.', 'Gennemgå de markerede søgeord manuelt. Sammenlæg, canonical eller redirect anbefales ikke ud fra dette alene.', 'redaktionel'))
+    else if (legit.length > 0) recs.push(rec('overlap', 'URL-overlap', 'behold', 'ok', 'Behold', obs, 'Tal fra de indlæste filer.', 'Overlappet ligner normal variantoverlap mellem produktsider.', 'Ingen handling.'))
+    else recs.push(rec('overlap', 'URL-overlap', 'ikke-verificeret', 'neutral', 'Ikke verificeret', obs, 'Tal fra de indlæste filer.', 'For få eksponeringer eller data til at vurdere overlappet. Det er ikke et dokumenteret problem.', 'Ingen handling.'))
+  }
 
   // Søgeordsfokus
   if (kwActive) {
@@ -706,9 +746,9 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   const h2Pts = isProduct ? 10 : h2Count >= 2 ? 10 : h2Count >= 1 ? 5 : 0
   const breakdown: ScoreRow[] = [
     { group: 'on-page', label: 'Title til stede', earned: title ? 8 : 0, max: 8, note: title ? 'Fundet' : 'Mangler' },
-    { group: 'on-page', label: 'Title: længde 30–65 tegn', earned: titleGoodLength ? 12 : 0, max: 12, note: `${title.length} tegn` },
+    { group: 'on-page', label: 'Title: længde 30–65 tegn', earned: titleLen.earned, max: 12, note: `${title.length} tegn${titleLen.state === 'mindre' ? ' – mindre afvigelse, delvise point' : titleLen.state === 'afvigende' ? ' – afviger tydeligt' : ''}` },
     { group: 'on-page', label: 'Meta description til stede', earned: meta ? 8 : 0, max: 8, note: meta ? 'Fundet' : 'Mangler' },
-    { group: 'on-page', label: 'Meta: længde 120–160 tegn', earned: metaGoodLength ? 12 : 0, max: 12, note: `${meta.length} tegn` },
+    { group: 'on-page', label: 'Meta: længde 120–160 tegn', earned: metaLen.earned, max: 12, note: `${meta.length} tegn${metaLen.state === 'mindre' ? ' – mindre afvigelse, delvise point' : metaLen.state === 'afvigende' ? ' – afviger tydeligt' : ''}` },
     { group: 'on-page', label: 'H1 til stede', earned: h1Present ? 15 : 0, max: 15, note: h1Present ? 'Fundet' : 'Mangler' },
     { group: 'on-page', label: 'Underoverskrifter', earned: h2Pts, max: 10, note: isProduct ? 'Produktside – fuld værdi' : `${h2Count} H2` },
     { group: 'on-page', label: 'Indhold til stede', earned: contentPts, max: 10, note: `${wordCount} ord (grundkontrol, ikke kvalitetsmål)` },
@@ -866,6 +906,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     relevanceFormula,
     coverage: { items: coverageItems, done: coverageDone, total: coverageItems.length },
     serpAnalyses,
+    overlap,
     focus,
     analysisMode: isNew ? 'ny' : 'eksisterende',
   }

@@ -51,7 +51,12 @@ export interface SerpAnalysis {
   verdict: 'primaer' | 'sekundaer' | 'fravaelg' | 'usikker'
   uncertain: boolean
   reasons: string[]
+  softIntent: boolean // informativ eller blandet søgeintention – ingen automatisk konklusion om anden side
+  ownRank: number | null // placering af den analyserede URL i SERP, hvis den findes
+  ownOtherUrls: { position: number; url: string; title: string }[] // andre URL'er fra samme domæne i SERP
 }
+
+function normU(u: string): string { return (u || '').toLowerCase().replace(/^https?:\/\/(www\.)?/, '').replace(/[?#].*$/, '').replace(/\/+$/, '') }
 
 export const KIND_LABEL: Record<PageKind, string> = {
   kategori: 'Kategori/produktliste',
@@ -107,7 +112,7 @@ function adjacentKinds(pageType: PageTypeInput): PageKind[] {
   }
 }
 
-export function analyzeSerp(data: SerpData, pageType: PageTypeInput): SerpAnalysis {
+export function analyzeSerp(data: SerpData, pageType: PageTypeInput, pageUrl?: string): SerpAnalysis {
   const organic = data.positions.filter(p => p.types.includes('organic') && p.url)
   const results: ClassifiedResult[] = organic.map(p => {
     const c = classifyOne(p)
@@ -143,17 +148,24 @@ export function analyzeSerp(data: SerpData, pageType: PageTypeInput): SerpAnalys
   if (b2cSignals > 0) reasons.push(`${b2cSignals} resultat(er) har titler med forbruger-/private-signaler – kontrollér, om søgningen er relevant for B2B.`)
   if (uncertain && n > 0) reasons.push('Klassifikationen er usikker: få resultater, mange uden sidetype fra Ahrefs eller baseret på titel/URL.')
 
+  const domShare = n > 0 ? (shares[dominant] ?? 0) : 0
+  const softIntent = n > 0 && (dominant === 'artikel' || (shares.artikel ?? 0) >= 0.3 || domShare < 0.5)
+  const me = pageUrl ? normU(pageUrl) : ''
+  const host = me.split('/')[0]
+  const ownRank = me ? (results.find(r => normU(r.url) === me)?.position ?? null) : null
+  const ownOtherUrls = me ? results.filter(r => normU(r.url) !== me && normU(r.url).split('/')[0] === host).map(r => ({ position: r.position, url: r.url, title: r.title })) : []
   let verdict: SerpAnalysis['verdict'] = 'usikker'
   if (n >= 5 && compatibleShare !== null) {
     const total = compatibleShare + (adjacentShare ?? 0)
     if (compatibleShare >= 0.5) verdict = 'primaer'
     else if (compatibleShare >= 0.3 || total >= 0.5) verdict = 'sekundaer'
-    else verdict = 'fravaelg'
+    else verdict = softIntent ? 'usikker' : 'fravaelg'
+    if (softIntent && compatibleShare < 0.5) reasons.push('Informativ eller blandet søgeintention: SERP er ikke grundlag for at fravælge søgeordet eller henvise det til en anden side. Vurdér, om din side kan dække en del af behovet.')
     reasons.push(`${Math.round(compatibleShare * 100)} % af resultaterne er direkte samme sidetype som din side (${pageType})${(adjacentShare ?? 0) > 0 ? `, yderligere ${Math.round((adjacentShare ?? 0) * 100)} % har en nærliggende sidetype med delvist samme funktion` : ''}.`)
     if (pageType === 'branche' && compatibleShare < 0.5) reasons.push('En branchelandingpage har ikke automatisk samme funktion som kategorisider, produktlister eller forsider – vurdér selv, om din side kan opfylde samme behov.')
   } else if (n >= 5 && compatibleShare === null) {
     reasons.push('Angiv sidetype (kategori, produkt, artikel, branche eller service) for at vurdere, om SERP passer til siden.')
   }
 
-  return { keyword: data.keyword, fetchedAt: data.fetchedAt, dataDate: organic[0]?.updateDate ?? data.positions[0]?.updateDate ?? '', organicCount: n, results, shares, dominant, probableIntent: intent, compatibleShare, adjacentShare, status: n === 0 ? 'tom' : 'ok', b2cSignals, verdict, uncertain, reasons }
+  return { keyword: data.keyword, fetchedAt: data.fetchedAt, dataDate: organic[0]?.updateDate ?? data.positions[0]?.updateDate ?? '', organicCount: n, results, shares, dominant, probableIntent: intent, compatibleShare, adjacentShare, status: n === 0 ? 'tom' : 'ok', b2cSignals, verdict, uncertain, reasons, softIntent, ownRank, ownOtherUrls }
 }

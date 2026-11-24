@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { analyzeSeo, SeoInput, SeoResult, KeywordStatus, containsKeyword, toPlainText, expectedCtr, normKw, KwStatus } from '@/lib/seoEngine'
+import { parseGscQueryPage, parseAhrefsUrls, normUrl, OVERLAP_LABEL, GscPageRow, GscPageParse, AhrefsUrlRow, OverlapResult } from '@/lib/overlap'
 import { SerpData, PageTypeInput, KIND_LABEL } from '@/lib/serpAnalysis'
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -487,6 +488,54 @@ function DiffText({ current, proposed }: { current: string; proposed: string }) 
   )
 }
 
+function OverlapPanel({ overlap, gscDataNote }: { overlap: OverlapResult; gscDataNote: string }) {
+  const color: Record<string, string> = { legitimt: 'bg-emerald-100 text-emerald-700', uhensigtsmaessigt: 'bg-amber-100 text-amber-700', 'mulig-kannibalisering': 'bg-orange-100 text-orange-700', begraenset: 'bg-gray-100 text-gray-600', utilstraekkeligt: 'bg-gray-100 text-gray-600', ingen: 'bg-gray-100 text-gray-600' }
+  const g = overlap.sources.gsc, a = overlap.sources.ahrefs
+  const pct = (x: number | null) => (x == null ? '–' : `${(x * 100).toFixed(1)} %`)
+  return (
+    <div data-testid="overlap-panel" className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+      <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-3">URL-overlap og mulig kannibalisering</p>
+      <p className="text-sm text-gray-700 mb-2">{overlap.summary}</p>
+      <div className="text-xs text-gray-500 mb-3 space-y-0.5">
+        <div><b>Kilde:</b> {g ? `GSC forespørgsel × landingsside (${g.rows} rækker, ${g.urls} URL'er, ${g.queries} forespørgsler)` : 'ingen GSC-side-data'}{a ? ` · Ahrefs (${a.rows} søgeord, ${a.withPrevCurr} med Previous/Current URL)` : ''}</div>
+        <div><b>Dataperiode:</b> {g ? `${g.periods.join(' / ')} (aflæst fra ${g.periodSource === 'ukendt' ? 'ingen kilde – angiv selv' : g.periodSource})` : 'ukendt'}</div>
+        {gscDataNote && <div>{gscDataNote}</div>}
+        {overlap.otherOverlapCount > 0 && <div>{overlap.otherOverlapCount} øvrige søgeord med overlap mellem andre URL&apos;er vises ikke.</div>}
+      </div>
+      <div className="space-y-3">
+        {overlap.keywords.map(k => (
+          <details key={k.keyword} data-testid="overlap-keyword" className="rounded-xl border border-gray-100 p-3">
+            <summary className="cursor-pointer flex flex-wrap items-center gap-2 text-sm">
+              <span className="font-semibold text-gray-800">{k.keyword}</span>
+              <span data-testid="overlap-class" className={`text-xs font-bold px-2 py-0.5 rounded-full ${color[k.classification]}`}>{OVERLAP_LABEL[k.classification]}</span>
+              <span className="text-xs text-gray-400">{k.urls.length} URL&apos;er · {k.totalImpressions} eksp. ({k.primaryPeriod || 'ukendt periode'})</span>
+            </summary>
+            <div className="mt-2 overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead><tr className="text-left text-gray-400"><th className="pr-2">URL</th><th className="pr-2">Periode</th><th className="pr-2">Klik</th><th className="pr-2">Eksp.</th><th className="pr-2">CTR</th><th className="pr-2">Pos.</th><th>Andel</th></tr></thead>
+                <tbody>
+                  {k.urls.map(u => (u.periods.length ? u.periods : [null]).map((p, i) => (
+                    <tr key={u.url + i} className="border-t border-gray-50 align-top">
+                      <td className="pr-2 py-1 break-all">{i === 0 ? <>{u.isCurrent && <b>Denne side · </b>}{u.url}<div className="text-gray-400">{u.kind !== 'ukendt' ? u.kind : 'type ukendt'} · {u.sources.join(' + ')}{u.ahrefsRole.length ? ` · ${u.ahrefsRole.join(', ')}` : ''}</div></> : ''}</td>
+                      <td className="pr-2 py-1">{p ? p.period : '–'}</td><td className="pr-2 py-1">{p ? p.clicks : '–'}</td><td className="pr-2 py-1">{p ? p.impressions : '–'}</td><td className="pr-2 py-1">{p ? pct(p.ctr) : '–'}</td><td className="pr-2 py-1">{p?.position != null ? p.position.toFixed(1) : '–'}</td><td className="py-1">{p ? pct(p.share) : '–'}</td>
+                    </tr>
+                  )))}
+                </tbody>
+              </table>
+            </div>
+            <ul className="mt-2 text-xs text-gray-600 list-disc ml-4">{k.reasons.map((r, i) => <li key={i}>{r}</li>)}{k.switchEvidence && <li>{k.switchEvidence}</li>}</ul>
+            <p className="mt-2 text-xs font-semibold text-gray-500">Usikkerhed</p>
+            <ul className="text-xs text-gray-500 list-disc ml-4">{k.uncertainty.map((r, i) => <li key={i}>{r}</li>)}</ul>
+            <p className="mt-2 text-xs font-semibold text-gray-500">Undersøg først</p>
+            <ul className="text-xs text-gray-500 list-disc ml-4">{k.checks.map((r, i) => <li key={i}>{r}</li>)}</ul>
+          </details>
+        ))}
+      </div>
+      <ul className="mt-3 text-xs text-gray-400 list-disc ml-4">{overlap.notes.map((n, i) => <li key={i}>{n}</li>)}</ul>
+    </div>
+  )
+}
+
 function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped, stored, onStore, onPatch, onClear }: {
   form: FormState
   setForm: React.Dispatch<React.SetStateAction<FormState>>
@@ -521,12 +570,13 @@ function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped, store
         targetKeyword: form.targetKeyword, keywordApproved: approved,
         approvedKeywords: Object.entries(kwStatus).filter(([, v]) => v === 'godkendt').map(([k]) => k),
         current: { title: form.pageTitle, meta: form.metaDescription, h1: form.h1, body: form.bodyContent.slice(0, 6000) },
-        verdicts: result.recommendations.map(r => ({ id: r.id, verdict: r.verdict, observation: r.observation, evidence: r.evidence })),
+        verdicts: result.recommendations.map(r => ({ id: r.id, verdict: r.verdict, kind: r.kind, observation: r.observation, evidence: r.evidence })),
         analysisMode: result.analysisMode,
         focus: result.focus.headline,
         keywordAssessments: result.focus.candidates.map(c => ({ keyword: c.keyword, volume: c.volume, status: c.status, b2b: c.b2b.overall, basis: c.b2b.basis, role: c.role, roleReason: c.roleReason, criteria: c.b2b.criteria.map(x => ({ k: x.label, v: x.verdict })) })),
         serp: Object.values(result.serpAnalyses).map(a => ({ keyword: a.keyword, dominant: a.dominant, intent: a.probableIntent, verdict: a.verdict, uncertain: a.uncertain, date: a.dataDate, topTitles: a.results.slice(0, 5).map(r => r.title) })),
         gsc: { enough: result.potentialConfidence !== 'ingen', notes: result.potentialNotes },
+        overlap: result.overlap.available ? { summary: result.overlap.summary, sources: result.overlap.sources, keywords: result.overlap.keywords.slice(0, 8).map(k => ({ keyword: k.keyword, classification: k.classification, period: k.primaryPeriod, impressions: k.totalImpressions, urls: k.urls.map(u => ({ url: u.url, current: u.isCurrent, kind: u.kind })), switchEvidence: k.switchEvidence, uncertainty: k.uncertainty })) } : null,
         serpAvailable: Object.keys(serpMap).length > 0,
       }
       const res = await fetch('/api/suggest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
@@ -766,6 +816,10 @@ export default function SeoDashboard() {
   const [ahrefsData, setAhrefsData] = useState<AhrefsRow[]>([])
   const [ahrefsFileName, setAhrefsFileName] = useState('')
   const [ahrefsError, setAhrefsError] = useState('')
+  const [gscPages, setGscPages] = useState<GscPageRow[]>([])
+  const [gscPagesMeta, setGscPagesMeta] = useState<GscPageParse | undefined>(undefined)
+  const [ahrefsUrls, setAhrefsUrls] = useState<AhrefsUrlRow[]>([])
+  const [gscDataNote, setGscDataNote] = useState('')
   const [dashTab, setDashTab] = useState('overblik')
   const [kwStatus, setKwStatus] = useState<Record<string, 'kandidat' | 'godkendt' | 'fravalgt'>>({})
   const [b2bOverride, setB2bOverride] = useState<Record<string, 'match' | 'delvist' | 'ikke'>>({})
@@ -854,11 +908,11 @@ export default function SeoDashboard() {
       gsc: gscData,
       intentFit: form.intentFit,
       businessContext: form.businessContext,
-      keywordStatus: kwStatus, b2bOverride, sortimentConfirmed: sortimentOk, serpIssues: serpIssue, analysisMode: form.analysisMode, pageType: form.pageType, gscMeta: { url: form.gscUrl, period: form.gscPeriod }, serp: serpMap,
+      keywordStatus: kwStatus, b2bOverride, sortimentConfirmed: sortimentOk, serpIssues: serpIssue, analysisMode: form.analysisMode, pageType: form.pageType, gscMeta: { url: form.gscUrl, period: form.gscPeriod }, serp: serpMap, gscPages, gscPagesMeta, ahrefsUrls,
       kwData: kwOverview.map(k => ({ keyword: k.keyword, volume: k.volume, difficulty: k.difficulty, intents: k.intents })),
     }
     setResult(analyzeSeo(input))
-  }, [form, gscData, kwOverview, kwStatus, serpMap, b2bOverride, sortimentOk, serpIssue])
+  }, [form, gscData, kwOverview, kwStatus, serpMap, b2bOverride, sortimentOk, serpIssue, gscPages, gscPagesMeta, ahrefsUrls])
 
   // Recalculate originalResult when keywords or scraped snapshot changes
   useEffect(() => {
@@ -871,11 +925,11 @@ export default function SeoDashboard() {
       h1: scraped.h1, bodyContent: scraped.bodyContent,
       structuredDataTypes: form.structuredDataTypes,
       structuredDataVerified: form.structuredDataVerified,
-      gsc: gscData, intentFit: form.intentFit, businessContext: form.businessContext, keywordStatus: kwStatus, b2bOverride, sortimentConfirmed: sortimentOk, serpIssues: serpIssue, analysisMode: form.analysisMode, pageType: form.pageType, gscMeta: { url: form.gscUrl, period: form.gscPeriod }, serp: serpMap,
+      gsc: gscData, intentFit: form.intentFit, businessContext: form.businessContext, keywordStatus: kwStatus, b2bOverride, sortimentConfirmed: sortimentOk, serpIssues: serpIssue, analysisMode: form.analysisMode, pageType: form.pageType, gscMeta: { url: form.gscUrl, period: form.gscPeriod }, serp: serpMap, gscPages, gscPagesMeta, ahrefsUrls,
       kwData: kwOverview.map(k => ({ keyword: k.keyword, volume: k.volume, difficulty: k.difficulty, intents: k.intents })),
     }))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.targetKeyword, form.semanticKeywords, scraped, form.structuredDataTypes, form.structuredDataVerified, gscData, form.intentFit, form.businessContext, kwOverview, kwStatus, serpMap, b2bOverride, sortimentOk, serpIssue, form.analysisMode, form.pageType, form.gscUrl, form.gscPeriod])
+  }, [form.targetKeyword, form.semanticKeywords, scraped, form.structuredDataTypes, form.structuredDataVerified, gscData, form.intentFit, form.businessContext, kwOverview, kwStatus, serpMap, b2bOverride, sortimentOk, serpIssue, form.analysisMode, form.pageType, form.gscUrl, form.gscPeriod, gscPages, gscPagesMeta, ahrefsUrls])
 
   const updateForm = useCallback((key: keyof FormState, val: string) => {
     setForm(prev => ({ ...prev, [key]: val }))
@@ -930,6 +984,20 @@ export default function SeoDashboard() {
     }
   }, [form.url, form.targetKeyword, form.semanticKeywords, form.structuredDataTypes])
 
+  // Udled keyword-niveau GSC-data for den aktuelle side fra forespørgsel × side-filen
+  useEffect(() => {
+    if (gscPages.length === 0 || !form.url) { setGscDataNote(''); return }
+    const me = normUrl(form.url)
+    const mine = gscPages.filter(r => normUrl(r.page) === me)
+    if (mine.length === 0) { setGscDataNote('Den analyserede URL findes ikke i GSC-filen – keyword-analysen bruger ikke disse tal.'); return }
+    const periods = [...new Set(mine.map(r => r.period))]
+    const tot = (p: string) => mine.filter(r => r.period === p).reduce((a, r) => a + r.impressions, 0)
+    const use = periods.slice().sort((a, b) => tot(b) - tot(a))[0]
+    const rows = mine.filter(r => r.period === use).map(r => ({ keyword: r.query, impressions: r.impressions, clicks: r.clicks, position: r.position ?? 0 }))
+    setGscData(rows)
+    setGscDataNote(periods.length > 1 ? `Keyword-analysen af denne side bruger kun perioden «${use}» (den med flest eksponeringer) for at undgå dobbelttælling.` : '')
+  }, [gscPages, form.url])
+
   // Handle GSC CSV upload
   const handleGscUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -945,6 +1013,17 @@ export default function SeoDashboard() {
         try {
           const XLSX = await import('xlsx')
           const wb = XLSX.read(evt.target?.result, { type: 'array' })
+          const allSheets = wb.SheetNames.map(n => ({ name: n, rows: XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: null }) as (string | number | null)[][] }))
+          const qp = parseGscQueryPage(allSheets, file.name)
+          if (qp) {
+            setGscPages(qp.rows); setGscPagesMeta(qp)
+            const pages = [...new Set(qp.rows.map(r => r.page))]
+            setForm(prev => {
+              const mine = prev.url ? pages.find(pg => normUrl(pg) === normUrl(prev.url)) : undefined
+              return { ...prev, gscUrl: prev.gscUrl || mine || '', gscPeriod: prev.gscPeriod || (qp.periodSource !== 'ukendt' ? qp.periods.filter(x => x !== 'ukendt').join(' / ') : '') }
+            })
+            return
+          }
           const ws = wb.Sheets[wb.SheetNames[0]]
           const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null }) as (string | number | null)[][]
 
@@ -984,6 +1063,18 @@ export default function SeoDashboard() {
       const reader = new FileReader()
       reader.onload = (evt) => {
         const text = evt.target?.result as string
+        const delim = (text.split('\n')[0] || '').includes(';') ? ';' : ','
+        const grid = text.split(/\r?\n/).filter(Boolean).map(l => l.split(delim).map(c => c.trim().replace(/^"|"$/g, '')))
+        const qpc = parseGscQueryPage([{ name: file.name, rows: grid }], file.name)
+        if (qpc) {
+          setGscPages(qpc.rows); setGscPagesMeta(qpc)
+          const pages = [...new Set(qpc.rows.map(r => r.page))]
+          setForm(prev => {
+            const mine = prev.url ? pages.find(pg => normUrl(pg) === normUrl(prev.url)) : undefined
+            return { ...prev, gscUrl: prev.gscUrl || mine || '', gscPeriod: prev.gscPeriod || (qpc.periodSource !== 'ukendt' ? qpc.periods.filter(x => x !== 'ukendt').join(' / ') : '') }
+          })
+          return
+        }
         const lines = text.split('\n').filter(Boolean)
         const data: GscData[] = []
         for (let i = 1; i < lines.length; i++) {
@@ -1011,6 +1102,7 @@ export default function SeoDashboard() {
         const ws = wb.Sheets[wb.SheetNames[0]]
         const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null }) as (string | number | null)[][]
         // Ahrefs Keywords Explorer-eksport (Keyword, Volume, Difficulty, Intents ...)
+        setAhrefsUrls(parseAhrefsUrls(raw))
         const head = (raw[0] || []).map(h => String(h ?? '').trim().toLowerCase())
         const iKw = head.indexOf('keyword'), iVol = head.indexOf('volume')
         if (iKw >= 0 && iVol >= 0) {
@@ -1228,6 +1320,7 @@ export default function SeoDashboard() {
                         gscPeriod: '',
                       })
                       setGscData([])
+                      setGscPages([]); setGscPagesMeta(undefined); setAhrefsUrls([])
                       setGscFileName('')
                       setAhrefsData([])
                       setAhrefsFileName('')
@@ -1342,7 +1435,7 @@ export default function SeoDashboard() {
                     <>
                       <div className="flex items-center justify-between mt-2">
                         <p className="text-xs text-green-600 font-medium">✓ {gscData.length} keywords indlæst</p>
-                        <button onClick={() => { setGscData([]); setGscFileName(''); setActivePanel('dashboard') }} className="text-xs text-gray-400 hover:text-red-500 transition">× Fjern</button>
+                        <button onClick={() => { setGscData([]); setGscPages([]); setGscPagesMeta(undefined); setGscFileName(''); setActivePanel('dashboard') }} className="text-xs text-gray-400 hover:text-red-500 transition">× Fjern</button>
                       </div>
                       <GscPreview data={gscData} />
                     </>
@@ -1372,7 +1465,7 @@ export default function SeoDashboard() {
                         <div className="flex items-center gap-2">
                           <p className="text-xs text-purple-600 font-medium">✓ {ahrefsData.length} keywords indlæst</p>
                           {ahrefsData.filter(r => r.otherUrls.length > 0).length > 0 && (
-                            <span className="text-xs bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full font-bold">⚡ {ahrefsData.filter(r => r.otherUrls.length > 0).length} kannibal.</span>
+                            <span className="text-xs bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full font-bold">⚡ {ahrefsData.filter(r => r.otherUrls.length > 0).length} med flere URL'er</span>
                           )}
                         </div>
                         <button onClick={() => { setAhrefsData([]); setKwOverview([]); setAhrefsFileName(''); setAhrefsError(''); setActivePanel('dashboard') }} className="text-xs text-gray-400 hover:text-red-500 transition">× Fjern</button>
@@ -1839,6 +1932,7 @@ export default function SeoDashboard() {
                                 {rec.verdict === 'behold' ? 'BEHOLD' : rec.verdict === 'optimer' ? 'OPTIMÉR' : rec.verdict === 'ikke-verificeret' ? 'IKKE VERIFICERET' : 'MANUEL VURDERING'}
                               </span>
                               {/^(Aktiv|Manuelt oplyst|Verificeret)/.test(rec.statusLabel) && <span className="text-xs text-gray-500">{rec.statusLabel}</span>}
+                              {rec.kind && <span data-testid="rec-kind" className="text-xs text-gray-500">{rec.kind === 'problem' ? 'Dokumenteret problem' : rec.kind === 'redaktionel' ? 'Redaktionel mulighed' : 'Længdeafvigelse'}</span>}
                             </div>
                           </div>
                           <span className="text-gray-300 text-lg font-light ml-2 flex-shrink-0">›</span>
@@ -1882,7 +1976,7 @@ export default function SeoDashboard() {
                               {c.serpState === 'tom' ? (<span className="text-amber-600 font-semibold">Ahrefs gav ingen SERP-resultater{(c.volume ?? 0) > 0 ? <span className="block font-normal text-gray-400">Ahrefs viser dog volumen {c.volume} – tomt SERP skyldes ikke nul søgevolumen</span> : null}</span>)
                                 : c.serp ? (<>
                                 <span className={`font-semibold ${c.serp.verdict === 'primaer' ? 'text-emerald-600' : c.serp.verdict === 'sekundaer' ? 'text-blue-600' : c.serp.verdict === 'fravaelg' ? 'text-red-500' : 'text-amber-600'}`}>
-                                  {c.serp.verdict === 'primaer' ? 'Passer (primær)' : c.serp.verdict === 'sekundaer' ? 'Delvist (sekundær)' : c.serp.verdict === 'fravaelg' ? 'Passer ikke' : 'Usikker'}
+                                  {c.serp.verdict === 'primaer' ? 'Passer (primær)' : c.serp.verdict === 'sekundaer' ? 'Delvist (sekundær)' : c.serp.verdict === 'fravaelg' ? 'Andre sidetyper dominerer' : 'Usikker'}
                                 </span>
                                 <div className="text-gray-400">{c.serp.summary}</div>
                               </>) : <span className="text-gray-400">Ikke analyseret</span>}
@@ -1917,7 +2011,7 @@ export default function SeoDashboard() {
                             <td className="py-2 px-3 text-xs">
                               <span className={`font-bold px-2 py-0.5 rounded-full ${stCls[c.status]}`}>{stLabel[c.status]}</span>
                               <div className={`mt-1 font-semibold ${c.role === 'primaer' ? 'text-emerald-700' : c.role === 'sekundaer' ? 'text-blue-600' : c.role === 'fravaelg' ? 'text-red-500' : c.role === 'anden-side' ? 'text-purple-600' : 'text-gray-400'}`}>
-                                Anbefaling: {c.role === 'primaer' ? (c.provisional ? 'Foreløbig primær kandidat' : 'Primær kandidat') : c.role === 'sekundaer' ? 'Sekundær' : c.role === 'fravaelg' ? 'Fravælg' : c.role === 'anden-side' ? 'Målret en anden side' : 'Afventer grundlag'}
+                                Anbefaling: {c.role === 'primaer' ? (c.provisional ? 'Foreløbig primær kandidat' : 'Primær kandidat') : c.role === 'sekundaer' ? 'Sekundær' : c.role === 'fravaelg' ? 'Fravælg' : c.role === 'anden-side' ? 'Anden eksisterende URL kan være bedre' : 'Afventer grundlag'}
                               </div>
                               <div className="flex flex-wrap gap-2 mt-1">
                                 <button onClick={() => setKwStatus(prev => ({ ...prev, [key]: 'kandidat' }))} className="text-blue-600 hover:underline">Kandidat</button>
@@ -1935,6 +2029,7 @@ export default function SeoDashboard() {
                   </div>
                   <p className="text-xs text-gray-400 mt-3">Status ændres aldrig automatisk – kun du godkender. Kun GODKENDTE søgeord aktiverer søgeordskontroller. Øvrige reducerer ikke on-page-scoren. Tekstligt overlap afgør aldrig forretningsmatch alene. Volumen i Ahrefs er ikke hele sandheden.</p>
                 </div>
+                {result.overlap.available && <OverlapPanel overlap={result.overlap} gscDataNote={gscDataNote} />}
                 {Object.keys(result.serpAnalyses).length > 0 && (
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
                   <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-3">SERP-analyse (Ahrefs SERP Overview, Danmark)</p>
