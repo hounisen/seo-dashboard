@@ -457,7 +457,22 @@ function AhrefsPreview({ data }: { data: AhrefsRow[] }) {
 // ── Tekstforslag (Claude API, kun efter manuel anmodning) ─────────────────────
 interface Suggestion { element: string; current: string; proposed: string; reason: string; observation?: string; judgement?: string; evidence: string; source: string; placement: string }
 interface SuggItem extends Suggestion { state: 'ny' | 'anvendt' | 'afvist'; draft: string }
-interface SuggSet { url: string; items: SuggItem[]; behold: { behold: boolean; reason: string } | null; meta: string }
+interface SuggDebug { [k: string]: unknown }
+interface SuggText { text: string; kind: string; message: string; at: string; debug?: SuggDebug }
+interface SuggSet { url: string; items: SuggItem[]; behold: { behold: boolean; reason: string } | null; meta: string; warnings?: string[]; textAnswer?: SuggText; analysisVersion?: string }
+
+// Simpel hash af det, forslagene bygger på (indhold, søgeord, status) – bruges til at se, om analysen er ændret siden
+function analysisVersion(f: FormState, kw: Record<string, string>): string {
+  const str = JSON.stringify([f.url, f.pageTitle, f.metaDescription, f.h1, f.bodyContent, f.targetKeyword, f.semanticKeywords, f.pageType, f.analysisMode, kw])
+  let h = 5381
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0
+  return (h >>> 0).toString(36)
+}
+
+const PROBLEM_LABEL: Record<string, string> = {
+  konfiguration: 'Konfigurationsfejl', api: 'API-fejl', netvaerk: 'Netværksfejl', tomt: 'Tomt svar', afbrudt: 'Afbrudt svar',
+  'ugyldig-json': 'Ugyldigt svarformat', 'manglende-felter': 'Manglende påkrævede felter', afvist: 'Svar afvist',
+}
 
 const SUGG_STORE_KEY = 'seoSuggestions'
 // Forslag knyttes til den analyserede URL, så forslag fra forskellige sider ikke blandes
@@ -472,7 +487,7 @@ function DiffText({ current, proposed }: { current: string; proposed: string }) 
   )
 }
 
-function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped, stored, onStore, onClear }: {
+function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped, stored, onStore, onPatch, onClear }: {
   form: FormState
   setForm: React.Dispatch<React.SetStateAction<FormState>>
   result: SeoResult
@@ -481,23 +496,25 @@ function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped, store
   scraped: { pageTitle: string; metaDescription: string; h1: string; bodyContent: string }
   stored: SuggSet | undefined
   onStore: (key: string, set: SuggSet) => void
+  onPatch: (key: string, fn: (cur: SuggSet | undefined) => SuggSet) => void
   onClear: (key: string) => void
 }) {
   // Forslagene ligger i forælderen (og i localStorage), så de overlever faneskift – kun indlæsningstilstand er lokal
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<{ message: string; kind: string; debug?: SuggDebug } | null>(null)
   const key = suggKey(form.url)
+  const version = analysisVersion(form, kwStatus)
   const items = stored?.items ?? []
   const behold = stored?.behold ?? null
   const meta = stored?.meta ?? ''
   const approved = kwStatus[normKw(form.targetKeyword)] === 'godkendt'
-  const save = (next: SuggItem[]) => onStore(key, { url: form.url, items: next, behold, meta })
+  const save = (next: SuggItem[]) => onPatch(key, cur => ({ url: form.url, ...cur, items: next, behold: cur?.behold ?? behold, meta: cur?.meta ?? meta }))
 
   const generate = async () => {
     const hasWork = items.some(i => i.state !== 'ny' || i.draft !== i.proposed)
     if (hasWork && !confirm('Du har forslag med redigeringer, anvendte eller afviste forslag. "Generér nye forslag" erstatter dem alle. Fortsæt?')) return
-    const reqKey = key, reqUrl = form.url
-    setLoading(true); setError('')
+    const reqKey = key, reqUrl = form.url, reqVersion = version
+    setLoading(true); setError(null)
     try {
       const payload = {
         url: form.url, pageType: form.pageType, businessContext: form.businessContext,
@@ -513,15 +530,25 @@ function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped, store
         serpAvailable: Object.keys(serpMap).length > 0,
       }
       const res = await fetch('/api/suggest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-      const d = await res.json()
-      if (!res.ok || d.error) { setError(d.error || 'Kunne ikke generere forslag.'); return }
+      let d: any = null
+      try { d = await res.json() } catch { /* ikke JSON */ }
+      // Fejl: eksisterende gemte forslag røres ikke
+      if (!d) { setError({ message: `Uventet svar fra serveren (HTTP ${res.status}).`, kind: 'api', debug: { status: res.status } }); return }
+      if (!res.ok || d.error) { setError({ message: d.error || 'Kunne ikke generere forslag.', kind: d.kind || 'api', debug: d.debug }); return }
+      if (d.textOnly) {
+        // Læsbart, men ikke fortolkeligt svar: vises som foreløbigt tekstsvar ved siden af eventuelle gemte forslag
+        onPatch(reqKey, cur => ({ url: reqUrl, items: [], behold: null, meta: '', ...cur, textAnswer: { text: d.text, kind: d.kind, message: d.message, at: d.generatedAt, debug: d.debug } }))
+        return
+      }
       onStore(reqKey, {
         url: reqUrl,
         behold: { behold: !!d.behold, reason: d.beholdReason || '' },
         items: (d.suggestions || []).slice(0, 3).map((s: Suggestion) => ({ ...s, state: 'ny' as const, draft: s.proposed })),
         meta: `${d.model || ''} · ${d.generatedAt ? new Date(d.generatedAt).toLocaleString('da-DK') : ''}`,
+        warnings: d.warnings || [],
+        analysisVersion: reqVersion,
       })
-    } catch { setError('Kunne ikke nå serveren. Resten af analysen er upåvirket.') }
+    } catch { setError({ message: 'Netværksfejl: kunne ikke nå serveren. Resten af analysen er upåvirket.', kind: 'netvaerk' }) }
     finally { setLoading(false) }
   }
 
@@ -553,12 +580,33 @@ function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped, store
       {!approved && <p className="text-xs bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 text-amber-700 mb-3">«{form.targetKeyword}» er ikke godkendt som SEO-søgeord. Forslag markeres derfor som foreløbige.</p>}
       <div className="flex flex-wrap items-center gap-3">
         <button onClick={generate} disabled={loading || !form.pageTitle} className="px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-semibold disabled:bg-gray-300">{loading ? 'Genererer…' : items.length || behold ? 'Generér nye forslag' : 'Generér forslag'}</button>
-        {(items.length > 0 || behold) && <button onClick={() => { if (confirm('Slet de gemte forslag for denne URL?')) onClear(key) }} className="text-xs text-gray-400 hover:text-red-500">Slet gemte forslag</button>}
+        {(items.length > 0 || behold || stored?.textAnswer) && <button onClick={() => { if (confirm('Slet de gemte forslag for denne URL?')) onClear(key) }} className="text-xs text-gray-400 hover:text-red-500">Slet gemte forslag</button>}
       </div>
       {stored && <p className="text-xs text-gray-400 mt-2">Gemte forslag for: {stored.url || '(ingen URL angivet)'}</p>}
-      {error && <p className="text-xs text-red-500 mt-3">{error}</p>}
-      {behold && (
-        <div className="mt-4 text-xs bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2 text-emerald-800">
+      {error && (
+        <div className="mt-3 text-xs bg-red-50 border border-red-100 rounded-lg px-3 py-2 text-red-700" data-testid="suggest-error">
+          <b>{PROBLEM_LABEL[error.kind] ?? 'Fejl'}:</b> {error.message}
+          <div className="text-red-500 mt-1">Tidligere gemte forslag er bevaret.</div>
+          {error.debug && <details className="mt-1"><summary className="cursor-pointer">Tekniske detaljer til fejlsøgning</summary><pre className="whitespace-pre-wrap text-gray-600">{JSON.stringify(error.debug, null, 2)}</pre></details>}
+        </div>
+      )}
+      {stored?.analysisVersion && stored.analysisVersion !== version && items.length > 0 && (
+        <p className="mt-3 text-xs bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 text-amber-700" data-testid="stale-note">Forslagene er genereret til en tidligere version af analysen (indhold, søgeord eller status er ændret siden). Vurdér, om de stadig passer.</p>
+      )}
+      {stored?.warnings && stored.warnings.length > 0 && (
+        <ul className="mt-3 text-xs text-amber-700 list-disc ml-4" data-testid="suggest-warnings">{stored.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
+      )}
+      {stored?.textAnswer && (
+        <div className="mt-3 text-xs border border-amber-200 bg-amber-50 rounded-lg px-3 py-2" data-testid="text-answer">
+          <b className="text-amber-800">Foreløbigt tekstsvar – ikke valideret ({PROBLEM_LABEL[stored.textAnswer.kind] ?? stored.textAnswer.kind}):</b> {stored.textAnswer.message}
+          <pre className="whitespace-pre-wrap text-gray-700 mt-2 max-h-72 overflow-auto">{stored.textAnswer.text}</pre>
+          <p className="text-gray-500 mt-1">Kan ikke anvendes i kladden, før det er valideret som forslag. Kopiér selv, hvad der er brugbart, eller generér igen.</p>
+          {stored.textAnswer.debug && <details className="mt-1"><summary className="cursor-pointer">Tekniske detaljer til fejlsøgning</summary><pre className="whitespace-pre-wrap text-gray-600">{JSON.stringify(stored.textAnswer.debug, null, 2)}</pre></details>}
+          <button onClick={() => onPatch(key, cur => ({ url: form.url, items: [], behold: null, meta: '', ...cur, textAnswer: undefined }))} className="mt-1 text-gray-500 hover:underline">Skjul tekstsvar</button>
+        </div>
+      )}
+      {behold && (behold.behold || behold.reason) && (
+        <div data-testid="behold" className="mt-4 text-xs bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2 text-emerald-800">
           {behold.behold ? 'BEHOLD: ' : ''}{behold.reason}
         </div>
       )}
@@ -737,6 +785,9 @@ export default function SeoDashboard() {
   const persistSugg = (next: Record<string, SuggSet>) => { try { localStorage.setItem(SUGG_STORE_KEY, JSON.stringify(next)) } catch { /* ignorer */ } }
   const storeSugg = useCallback((key: string, set: SuggSet) => {
     setSuggStore(prev => { const next = { ...prev, [key]: set }; persistSugg(next); return next })
+  }, [])
+  const patchSugg = useCallback((key: string, fn: (cur: SuggSet | undefined) => SuggSet) => {
+    setSuggStore(prev => { const next = { ...prev, [key]: fn(prev[key]) }; persistSugg(next); return next })
   }, [])
   const clearSugg = useCallback((key: string) => {
     setSuggStore(prev => { const next = { ...prev }; delete next[key]; persistSugg(next); return next })
@@ -1762,7 +1813,7 @@ export default function SeoDashboard() {
 
                 </>)}
                 {dashTab === 'forslag' && (<>
-                <SuggestPanel form={form} setForm={setForm} result={result} kwStatus={kwStatus} serpMap={serpMap} scraped={scraped} stored={suggStore[suggKey(form.url)]} onStore={storeSugg} onClear={clearSugg} />
+                <SuggestPanel form={form} setForm={setForm} result={result} kwStatus={kwStatus} serpMap={serpMap} scraped={scraped} stored={suggStore[suggKey(form.url)]} onStore={storeSugg} onPatch={patchSugg} onClear={clearSugg} />
                 </>)}
                 {dashTab === 'editor' && (<>
                 {/* Live Editor */}
