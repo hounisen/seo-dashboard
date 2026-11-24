@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { applyBriefGate } from '@/lib/suggestBrief'
 import { SUGGEST_SCHEMA, parseSuggestionText, scrub } from '@/lib/suggestParse'
 
 // Genererer konkrete tekstforslag med Claude. Kaldes kun manuelt (knappen "Generér forslag").
@@ -19,6 +20,16 @@ Regler:
 - Foreslå aldrig en ændring alene for at opnå højere score. Mindre afvigelser fra anbefalet tegnlængde (kind='laengde' i verdicts, eller title/meta inden for få tegn af intervallet) er ikke et dokumenteret problem: svar behold, medmindre teksten har en reel indholds- eller relevansmangel. Skeln mellem dokumenterede problemer, redaktionelle forbedringsmuligheder og små længdeafvigelser.
 - Ved informativ eller blandet søgeintention må du ikke konkludere, at søgeordet hører til en anden side, og aldrig foreslå nye kategori- eller vidensider uden konkret evidens i inputtet (fx en navngiven eksisterende URL i SERP). Vurdér i stedet, om denne side kan dække en del af behovet.
 - Input kan indeholde overlap (URL-overlap/mulig kannibalisering fra GSC og Ahrefs). Brug det kun som kontekst: overlap mellem produktvarianter (legitimt) kræver ingen handling, og 'utilstraekkeligt'/'begraenset' er ikke et problem. Konkludér aldrig kannibalisering, og foreslå aldrig sammenlægning, canonical eller redirect ud fra fælles søgeord. Hvis overlap er 'uhensigtsmaessigt' eller 'mulig-kannibalisering', må du kun foreslå at tydeliggøre sidens egen intention/produktmatch (fx title/H1/intro) eller et relevant internt link, markeret som 'hypotese' – og nævne usikkerheden.
+- Input kan indeholde performance (GSC): current er den aktuelle periode, previous sammenligningsperioden. Brug kun current som aktuelle tal og nævn altid periode og kilde. Hvis performance.status er 'valideringsfejl', brug ingen GSC-tal. Præsentér aldrig teoretiske klikestimater som dokumenteret potentiale, og nævn at summer fra GSC-eksporter ikke er validerede totaler.
+- Input starter med «brief»: et beslutningsgrundlag beregnet af dashboardet. Følg det:
+  1) Læs først udviklingen (brief.summary og brief.keywords[].trend: aktuel periode vs. sammenligningsperiode). Fremhæv væsentlig fremgang og tilbagegang i observation, og nævn periode og kilde (GSC, Ahrefs, SERP) i source.
+  2) Hvis brief.gate.allowPerformanceBased er false, må ingen forslag bygge på GSC-tal. Brug kun den aktuelle periode som aktuelle tal – aldrig sammenligningsperioden.
+  3) Hvis brief.gate.recommendBehold er true, taler performance for at bevare indholdet – men det blokerer ikke forbedringer. Du kan stadig give forslag (OPTIMÉR) ved faktuelle fejl, forkerte produktdata, manglende oplysninger i produktteksten eller reelle problemer med søgeintention eller konvertering, når de kan påvises i sidens tekst eller input. Omskriv ikke velfungerende indhold, og foreslå aldrig ændringer alene for at hæve en on-page-score.
+  4) Prioritér efter forretningsrelevans og dokumenteret mulighed – ikke kun eksponeringer og placering: søgeintention (SERP), produktspecifikationer på siden, B2B-målgruppe og sidens konverteringsformål. keywords[].relevance og action styrer prioriteringen; action 'hypotese-mulighed' er altid en hypotese, 'afvent-data' giver intet forslag.
+  5) Ved action 'undersoeg-overlap' (flere Hounisen-URL'er har aktuel synlighed): foreslå ikke ændringer på denne side på det søgeord; beskriv i stedet, hvad der bør undersøges (hvilken side opfylder intentionen bedst), som 'hypotese'.
+  6) CTR og placering er observationer; forventet CTR (ctrNote) er en hypotese baseret på en generisk benchmarkkurve. Angiv aldrig estimerede ekstra klik eller trafik som dokumenteret mulighed.
+  7) Foreslå ikke nye afsnit eller tekst om emner, som siden allerede dækker tilstrækkeligt (keywords[].coverage 'dækket', eller fremgår af current.body).
+  8) Højst tre forslag, hvert med element, current, proposed, placement, observation (fakta + periode), judgement og source. Er ingen ændring fagligt begrundet, svar behold=true.
 - title ≈ 30–65 tegn, meta ≈ 120–160 tegn. Skriv naturligt dansk til B2B-målgruppen, ingen overdrivelser.
 Format: {"behold":boolean,"beholdReason":string,"suggestions":[{"element":...,"current":...,"proposed":...,"observation":...,"judgement":...,"evidence":...,"source":...,"placement":...}]}`
 
@@ -84,7 +95,9 @@ export async function POST(req: NextRequest) {
     const text: string = (json?.content ?? []).filter((c: any) => c?.type === 'text' || c?.text).map((c: any) => c.text ?? '').join('')
     const outcome = parseSuggestionText(text, json?.stop_reason)
     if (outcome.ok) {
-      return NextResponse.json({ ok: true, ...outcome.data, model, generatedAt: new Date().toISOString(), debug })
+      const gated = applyBriefGate(outcome.data, body?.brief)
+      debug.briefGate = body?.brief?.gate ? { allowPerformanceBased: body.brief.gate.allowPerformanceBased, recommendBehold: body.brief.gate.recommendBehold } : undefined
+      return NextResponse.json({ ok: true, ...gated, model, generatedAt: new Date().toISOString(), debug })
     }
     debug.problem = outcome.kind
     // Tomt eller afvist svar: ingen tekst at vise. Læsbart svar, der ikke kan fortolkes: vises som foreløbigt tekstsvar.

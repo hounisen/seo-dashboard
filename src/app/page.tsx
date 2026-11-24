@@ -2,7 +2,8 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { analyzeSeo, SeoInput, SeoResult, KeywordStatus, containsKeyword, toPlainText, expectedCtr, normKw, KwStatus } from '@/lib/seoEngine'
-import { parseGscQueryPage, parseAhrefsUrls, normUrl, OVERLAP_LABEL, GscPageRow, GscPageParse, AhrefsUrlRow, OverlapResult } from '@/lib/overlap'
+import { parseGscQueryPage, parseAhrefsUrls, buildPerformance, Performance, PeriodInfo, normUrl, OVERLAP_LABEL, GscPageRow, GscPageParse, AhrefsUrlRow, OverlapResult } from '@/lib/overlap'
+import { buildBrief } from '@/lib/suggestBrief'
 import { SerpData, PageTypeInput, KIND_LABEL } from '@/lib/serpAnalysis'
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -488,6 +489,47 @@ function DiffText({ current, proposed }: { current: string; proposed: string }) 
   )
 }
 
+function periodText(info?: PeriodInfo): string {
+  if (!info || !info.current) return ''
+  const d = info.periods.find(p => p.label === info.current)
+  return d && d.start && d.end ? `${d.start} – ${d.end}` : info.current
+}
+
+function PerformancePanel({ perf }: { perf: Performance }) {
+  const f = (n: number | null | undefined, d = 0) => (n == null ? '–' : n.toLocaleString('da-DK', { minimumFractionDigits: d, maximumFractionDigits: d }))
+  const pc = (n: number | null | undefined) => (n == null ? '–' : `${(n * 100).toLocaleString('da-DK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %`)
+  const delta = (a: number | null | undefined, b: number | null | undefined, d = 0) => (a == null || b == null ? '–' : `${a - b > 0 ? '+' : ''}${f(a - b, d)}`)
+  return (
+    <div data-testid="performance-panel" className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+      <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-3">GSC-udvikling for denne URL</p>
+      {perf.status === 'valideringsfejl' ? (
+        <p data-testid="perf-validation-error" className="text-sm font-semibold text-red-600">Datavalideringsfejl: {perf.error} SEO-potentiale, CTR-analyser og klikestimater er stoppet.</p>
+      ) : !perf.urlFound ? (
+        <p className="text-sm text-gray-500">{perf.notes[0]}</p>
+      ) : (
+        <>
+          <p className="text-xs text-gray-500 mb-2"><b>Aktuel periode:</b> {perf.currentLabel}{perf.previousLabel ? <> · <b>Sammenligning:</b> {perf.previousLabel}</> : ' (kun én periode – udvikling kan ikke vises)'}</p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead><tr className="text-left text-gray-400"><th className="pr-2">Søgeord</th><th className="pr-2">Klik</th><th className="pr-2">Eksp.</th><th className="pr-2">CTR</th><th className="pr-2">Pos.</th>{perf.previousLabel && <><th className="pr-2">Forrige: klik</th><th className="pr-2">eksp.</th><th className="pr-2">CTR</th><th className="pr-2">pos.</th><th>Δ klik</th></>}</tr></thead>
+              <tbody>
+                {perf.rows.slice(0, 15).map(r => (
+                  <tr key={r.keyword} data-testid="perf-row" className="border-t border-gray-50">
+                    <td className="pr-2 py-1 font-semibold text-gray-700">{r.keyword}</td>
+                    <td className="pr-2">{f(r.cur?.clicks)}</td><td className="pr-2">{f(r.cur?.impressions)}</td><td className="pr-2">{pc(r.cur?.ctr)}</td><td className="pr-2">{f(r.cur?.position, 1)}</td>
+                    {perf.previousLabel && <><td className="pr-2 text-gray-500">{f(r.prev?.clicks)}</td><td className="pr-2 text-gray-500">{f(r.prev?.impressions)}</td><td className="pr-2 text-gray-500">{pc(r.prev?.ctr)}</td><td className="pr-2 text-gray-500">{f(r.prev?.position, 1)}</td><td>{delta(r.cur?.clicks, r.prev?.clicks)}</td></>}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <ul className="mt-2 text-xs text-gray-400 list-disc ml-4">{perf.notes.map((n, i) => <li key={i}>{n}</li>)}<li>Teoretiske klikestimater er ikke dokumenteret trafikpotentiale.</li></ul>
+        </>
+      )}
+    </div>
+  )
+}
+
 function OverlapPanel({ overlap, gscDataNote }: { overlap: OverlapResult; gscDataNote: string }) {
   const color: Record<string, string> = { legitimt: 'bg-emerald-100 text-emerald-700', uhensigtsmaessigt: 'bg-amber-100 text-amber-700', 'mulig-kannibalisering': 'bg-orange-100 text-orange-700', begraenset: 'bg-gray-100 text-gray-600', utilstraekkeligt: 'bg-gray-100 text-gray-600', ingen: 'bg-gray-100 text-gray-600' }
   const g = overlap.sources.gsc, a = overlap.sources.ahrefs
@@ -496,9 +538,10 @@ function OverlapPanel({ overlap, gscDataNote }: { overlap: OverlapResult; gscDat
     <div data-testid="overlap-panel" className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
       <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-3">URL-overlap og mulig kannibalisering</p>
       <p className="text-sm text-gray-700 mb-2">{overlap.summary}</p>
+      {overlap.validationError && <p data-testid="overlap-validation-error" className="text-sm font-semibold text-red-600 mb-2">Datavalideringsfejl: {overlap.validationError}</p>}
       <div className="text-xs text-gray-500 mb-3 space-y-0.5">
         <div><b>Kilde:</b> {g ? `GSC forespørgsel × landingsside (${g.rows} rækker, ${g.urls} URL'er, ${g.queries} forespørgsler)` : 'ingen GSC-side-data'}{a ? ` · Ahrefs (${a.rows} søgeord, ${a.withPrevCurr} med Previous/Current URL)` : ''}</div>
-        <div><b>Dataperiode:</b> {g ? `${g.periods.join(' / ')} (aflæst fra ${g.periodSource === 'ukendt' ? 'ingen kilde – angiv selv' : g.periodSource})` : 'ukendt'}</div>
+        <div><b>Dataperiode:</b> {overlap.period.current ? `aktuel ${overlap.period.current}${overlap.period.previous ? `, sammenligning ${overlap.period.previous}` : ''}` : g ? 'kan ikke identificeres' : 'ukendt'}{g && overlap.period.current ? ` (aflæst fra ${g.periodSource === 'ukendt' ? 'ingen kilde' : g.periodSource})` : ''}</div>
         {gscDataNote && <div>{gscDataNote}</div>}
         {overlap.otherOverlapCount > 0 && <div>{overlap.otherOverlapCount} øvrige søgeord med overlap mellem andre URL&apos;er vises ikke.</div>}
       </div>
@@ -516,7 +559,7 @@ function OverlapPanel({ overlap, gscDataNote }: { overlap: OverlapResult; gscDat
                 <tbody>
                   {k.urls.map(u => (u.periods.length ? u.periods : [null]).map((p, i) => (
                     <tr key={u.url + i} className="border-t border-gray-50 align-top">
-                      <td className="pr-2 py-1 break-all">{i === 0 ? <>{u.isCurrent && <b>Denne side · </b>}{u.url}<div className="text-gray-400">{u.kind !== 'ukendt' ? u.kind : 'type ukendt'} · {u.sources.join(' + ')}{u.ahrefsRole.length ? ` · ${u.ahrefsRole.join(', ')}` : ''}</div></> : ''}</td>
+                      <td className="pr-2 py-1 break-all">{i === 0 ? <>{u.isCurrent && <b>Denne side · </b>}{u.url}<div className="text-gray-400"><span data-testid="url-status" className={u.status === 'aktuel' ? 'text-emerald-600' : 'text-amber-600'}>{u.status === 'aktuel' ? 'Rangerer aktuelt' : u.status === 'kun-tidligere' ? 'Kun eksponeringer i tidligere periode' : 'Kun observeret i Ahrefs'}</span> · {u.kind !== 'ukendt' ? u.kind : 'type ukendt'} · {u.sources.join(' + ')}{u.ahrefsRole.length ? ` · ${u.ahrefsRole.join(', ')}` : ''}</div></> : ''}</td>
                       <td className="pr-2 py-1">{p ? p.period : '–'}</td><td className="pr-2 py-1">{p ? p.clicks : '–'}</td><td className="pr-2 py-1">{p ? p.impressions : '–'}</td><td className="pr-2 py-1">{p ? pct(p.ctr) : '–'}</td><td className="pr-2 py-1">{p?.position != null ? p.position.toFixed(1) : '–'}</td><td className="py-1">{p ? pct(p.share) : '–'}</td>
                     </tr>
                   )))}
@@ -565,7 +608,9 @@ function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped, store
     const reqKey = key, reqUrl = form.url, reqVersion = version
     setLoading(true); setError(null)
     try {
+      const brief = buildBrief(result, [form.pageTitle, form.metaDescription, form.h1, toPlainText(form.bodyContent)].join(' '))
       const payload = {
+        brief,
         url: form.url, pageType: form.pageType, businessContext: form.businessContext,
         targetKeyword: form.targetKeyword, keywordApproved: approved,
         approvedKeywords: Object.entries(kwStatus).filter(([, v]) => v === 'godkendt').map(([k]) => k),
@@ -577,6 +622,7 @@ function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped, store
         serp: Object.values(result.serpAnalyses).map(a => ({ keyword: a.keyword, dominant: a.dominant, intent: a.probableIntent, verdict: a.verdict, uncertain: a.uncertain, date: a.dataDate, topTitles: a.results.slice(0, 5).map(r => r.title) })),
         gsc: { enough: result.potentialConfidence !== 'ingen', notes: result.potentialNotes },
         overlap: result.overlap.available ? { summary: result.overlap.summary, sources: result.overlap.sources, keywords: result.overlap.keywords.slice(0, 8).map(k => ({ keyword: k.keyword, classification: k.classification, period: k.primaryPeriod, impressions: k.totalImpressions, urls: k.urls.map(u => ({ url: u.url, current: u.isCurrent, kind: u.kind })), switchEvidence: k.switchEvidence, uncertainty: k.uncertainty })) } : null,
+        performance: result.performance.status === 'ingen' ? null : { status: result.performance.status, error: result.performance.error, currentPeriod: result.performance.currentLabel, previousPeriod: result.performance.previousLabel, totals: result.performance.totals, keywords: result.performance.rows.slice(0, 10).map(r => ({ keyword: r.keyword, current: r.cur, previous: r.prev })) },
         serpAvailable: Object.keys(serpMap).length > 0,
       }
       const res = await fetch('/api/suggest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
@@ -632,6 +678,25 @@ function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped, store
         <button onClick={generate} disabled={loading || !form.pageTitle} className="px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-semibold disabled:bg-gray-300">{loading ? 'Genererer…' : items.length || behold ? 'Generér nye forslag' : 'Generér forslag'}</button>
         {(items.length > 0 || behold || stored?.textAnswer) && <button onClick={() => { if (confirm('Slet de gemte forslag for denne URL?')) onClear(key) }} className="text-xs text-gray-400 hover:text-red-500">Slet gemte forslag</button>}
       </div>
+      {(() => {
+        const b = buildBrief(result, [form.pageTitle, form.metaDescription, form.h1, toPlainText(form.bodyContent)].join(' '))
+        const T: Record<string, string> = { fremgang: 'Fremgang', tilbagegang: 'Tilbagegang', blandet: 'Blandet', stabil: 'Stabil', ny: 'Ny synlighed', forsvundet: 'Forsvundet', 'for-faa-data': 'For få data' }
+        return (
+          <details data-testid="brief" className="mt-3 text-xs bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
+            <summary className="cursor-pointer font-semibold text-gray-600">Beslutningsgrundlag for forslagene {b.dataStatus === 'valideringsfejl' ? '(datavalideringsfejl)' : b.currentPeriod ? `(aktuel periode ${b.currentPeriod})` : '(ingen GSC-periode)'}</summary>
+            <p className="mt-2 text-gray-600" data-testid="brief-gate">{b.gate.reason}</p>
+            <ul className="mt-1 list-disc ml-4 text-gray-500">{b.summary.map((x, i) => <li key={i}>{x}</li>)}</ul>
+            {b.keywords.length > 0 && (
+              <ul className="mt-2 space-y-1">
+                {b.keywords.slice(0, 8).map(k => (
+                  <li key={k.keyword} data-testid="brief-keyword" className="text-gray-600"><b>{k.keyword}</b> – {T[k.trend]}{k.deltaClicks != null ? ` (klik ${k.deltaClicks > 0 ? '+' : ''}${k.deltaClicks}${k.deltaPosition != null ? `, placering ${k.deltaPosition > 0 ? '+' : ''}${k.deltaPosition}` : ''})` : ''}. {k.assessment}{k.ctrNote ? ` ${k.ctrNote}` : ''}</li>
+                ))}
+              </ul>
+            )}
+            <p className="mt-2 text-gray-400">{b.method}</p>
+          </details>
+        )
+      })()}
       {stored && <p className="text-xs text-gray-400 mt-2">Gemte forslag for: {stored.url || '(ingen URL angivet)'}</p>}
       {error && (
         <div className="mt-3 text-xs bg-red-50 border border-red-100 rounded-lg px-3 py-2 text-red-700" data-testid="suggest-error">
@@ -817,7 +882,8 @@ export default function SeoDashboard() {
   const [ahrefsFileName, setAhrefsFileName] = useState('')
   const [ahrefsError, setAhrefsError] = useState('')
   const [gscPages, setGscPages] = useState<GscPageRow[]>([])
-  const [gscPagesMeta, setGscPagesMeta] = useState<GscPageParse | undefined>(undefined)
+  const [gscPagesMeta, setGscPagesMeta] = useState<(GscPageParse & { periodInfo?: PeriodInfo }) | undefined>(undefined)
+  const [gscValidationError, setGscValidationError] = useState('')
   const [ahrefsUrls, setAhrefsUrls] = useState<AhrefsUrlRow[]>([])
   const [gscDataNote, setGscDataNote] = useState('')
   const [dashTab, setDashTab] = useState('overblik')
@@ -908,11 +974,11 @@ export default function SeoDashboard() {
       gsc: gscData,
       intentFit: form.intentFit,
       businessContext: form.businessContext,
-      keywordStatus: kwStatus, b2bOverride, sortimentConfirmed: sortimentOk, serpIssues: serpIssue, analysisMode: form.analysisMode, pageType: form.pageType, gscMeta: { url: form.gscUrl, period: form.gscPeriod }, serp: serpMap, gscPages, gscPagesMeta, ahrefsUrls,
+      keywordStatus: kwStatus, b2bOverride, sortimentConfirmed: sortimentOk, serpIssues: serpIssue, analysisMode: form.analysisMode, pageType: form.pageType, gscMeta: { url: form.gscUrl, period: form.gscPeriod }, serp: serpMap, gscPages, gscPagesMeta, ahrefsUrls, gscValidationError,
       kwData: kwOverview.map(k => ({ keyword: k.keyword, volume: k.volume, difficulty: k.difficulty, intents: k.intents })),
     }
     setResult(analyzeSeo(input))
-  }, [form, gscData, kwOverview, kwStatus, serpMap, b2bOverride, sortimentOk, serpIssue, gscPages, gscPagesMeta, ahrefsUrls])
+  }, [form, gscData, kwOverview, kwStatus, serpMap, b2bOverride, sortimentOk, serpIssue, gscPages, gscPagesMeta, ahrefsUrls, gscValidationError])
 
   // Recalculate originalResult when keywords or scraped snapshot changes
   useEffect(() => {
@@ -925,11 +991,11 @@ export default function SeoDashboard() {
       h1: scraped.h1, bodyContent: scraped.bodyContent,
       structuredDataTypes: form.structuredDataTypes,
       structuredDataVerified: form.structuredDataVerified,
-      gsc: gscData, intentFit: form.intentFit, businessContext: form.businessContext, keywordStatus: kwStatus, b2bOverride, sortimentConfirmed: sortimentOk, serpIssues: serpIssue, analysisMode: form.analysisMode, pageType: form.pageType, gscMeta: { url: form.gscUrl, period: form.gscPeriod }, serp: serpMap, gscPages, gscPagesMeta, ahrefsUrls,
+      gsc: gscData, intentFit: form.intentFit, businessContext: form.businessContext, keywordStatus: kwStatus, b2bOverride, sortimentConfirmed: sortimentOk, serpIssues: serpIssue, analysisMode: form.analysisMode, pageType: form.pageType, gscMeta: { url: form.gscUrl, period: form.gscPeriod }, serp: serpMap, gscPages, gscPagesMeta, ahrefsUrls, gscValidationError,
       kwData: kwOverview.map(k => ({ keyword: k.keyword, volume: k.volume, difficulty: k.difficulty, intents: k.intents })),
     }))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.targetKeyword, form.semanticKeywords, scraped, form.structuredDataTypes, form.structuredDataVerified, gscData, form.intentFit, form.businessContext, kwOverview, kwStatus, serpMap, b2bOverride, sortimentOk, serpIssue, form.analysisMode, form.pageType, form.gscUrl, form.gscPeriod, gscPages, gscPagesMeta, ahrefsUrls])
+  }, [form.targetKeyword, form.semanticKeywords, scraped, form.structuredDataTypes, form.structuredDataVerified, gscData, form.intentFit, form.businessContext, kwOverview, kwStatus, serpMap, b2bOverride, sortimentOk, serpIssue, form.analysisMode, form.pageType, form.gscUrl, form.gscPeriod, gscPages, gscPagesMeta, ahrefsUrls, gscValidationError])
 
   const updateForm = useCallback((key: keyof FormState, val: string) => {
     setForm(prev => ({ ...prev, [key]: val }))
@@ -984,25 +1050,22 @@ export default function SeoDashboard() {
     }
   }, [form.url, form.targetKeyword, form.semanticKeywords, form.structuredDataTypes])
 
-  // Udled keyword-niveau GSC-data for den aktuelle side fra forespørgsel × side-filen
+  // Udled keyword-niveau GSC-data for den aktuelle side fra forespørgsel × side-filen (kun den aktuelle periode)
   useEffect(() => {
-    if (gscPages.length === 0 || !form.url) { setGscDataNote(''); return }
-    const me = normUrl(form.url)
-    const mine = gscPages.filter(r => normUrl(r.page) === me)
-    if (mine.length === 0) { setGscDataNote('Den analyserede URL findes ikke i GSC-filen – keyword-analysen bruger ikke disse tal.'); return }
-    const periods = Array.from(new Set(mine.map(r => r.period)))
-    const tot = (p: string) => mine.filter(r => r.period === p).reduce((a, r) => a + r.impressions, 0)
-    const use = periods.slice().sort((a, b) => tot(b) - tot(a))[0]
-    const rows = mine.filter(r => r.period === use).map(r => ({ keyword: r.query, impressions: r.impressions, clicks: r.clicks, position: r.position ?? 0 }))
-    setGscData(rows)
-    setGscDataNote(periods.length > 1 ? `Keyword-analysen af denne side bruger kun perioden «${use}» (den med flest eksponeringer) for at undgå dobbelttælling.` : '')
-  }, [gscPages, form.url])
+    if (gscPages.length === 0) { return }
+    const perf = buildPerformance(gscPages, gscPagesMeta?.periodInfo, form.url)
+    if (perf.status === 'valideringsfejl') { setGscData([]); setGscDataNote(`Datavalideringsfejl: ${perf.error}`); return }
+    if (!perf.urlFound) { setGscData([]); setGscDataNote('Den analyserede URL findes ikke i GSC-filen – keyword-analysen bruger ikke disse tal.'); return }
+    setGscData(perf.rows.filter(r => r.cur).map(r => ({ keyword: r.keyword, impressions: r.cur!.impressions, clicks: r.cur!.clicks, position: r.cur!.position ?? 0 })))
+    setGscDataNote(`Aktuel periode: ${perf.currentLabel}${perf.previousLabel ? ` (sammenlignet med ${perf.previousLabel})` : ''}.`)
+  }, [gscPages, gscPagesMeta, form.url])
 
   // Handle GSC CSV upload
   const handleGscUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
     setGscFileName(file.name)
+    setGscValidationError(''); setGscPages([]); setGscPagesMeta(undefined)
 
     const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls')
 
@@ -1020,7 +1083,7 @@ export default function SeoDashboard() {
             const pages = Array.from(new Set(qp.rows.map(r => r.page)))
             setForm(prev => {
               const mine = prev.url ? pages.find(pg => normUrl(pg) === normUrl(prev.url)) : undefined
-              return { ...prev, gscUrl: prev.gscUrl || mine || '', gscPeriod: prev.gscPeriod || (qp.periodSource !== 'ukendt' ? qp.periods.filter(x => x !== 'ukendt').join(' / ') : '') }
+              return { ...prev, gscUrl: prev.gscUrl || mine || '', gscPeriod: prev.gscPeriod || periodText(qp.periodInfo) }
             })
             return
           }
@@ -1039,6 +1102,12 @@ export default function SeoDashboard() {
           const colPos     = headers.findIndex(h => h.includes('placering') || h.includes('position'))
 
           if (colKeyword === -1) return // unrecognised format
+          const clickCols = headers.filter(h => (h === 'klik' || h.includes('click') || h.startsWith('klik')) && !/(difference|forskel|ændring|change|delta)/.test(h)).length
+          if (clickCols > 1) {
+            setGscData([])
+            setGscValidationError('Filen indeholder flere perioder (flere Klik-kolonner), men ingen landingsside-kolonne, så perioderne kan ikke tilknyttes entydigt. Indlæs en eksport med forespørgsel og landingsside, eller en fil med én periode.')
+            return
+          }
 
           const data: GscData[] = []
           for (let i = 1; i < raw.length; i++) {
@@ -1071,7 +1140,7 @@ export default function SeoDashboard() {
           const pages = Array.from(new Set(qpc.rows.map(r => r.page)))
           setForm(prev => {
             const mine = prev.url ? pages.find(pg => normUrl(pg) === normUrl(prev.url)) : undefined
-            return { ...prev, gscUrl: prev.gscUrl || mine || '', gscPeriod: prev.gscPeriod || (qpc.periodSource !== 'ukendt' ? qpc.periods.filter(x => x !== 'ukendt').join(' / ') : '') }
+            return { ...prev, gscUrl: prev.gscUrl || mine || '', gscPeriod: prev.gscPeriod || periodText(qpc.periodInfo) }
           })
           return
         }
@@ -1320,7 +1389,7 @@ export default function SeoDashboard() {
                         gscPeriod: '',
                       })
                       setGscData([])
-                      setGscPages([]); setGscPagesMeta(undefined); setAhrefsUrls([])
+                      setGscPages([]); setGscPagesMeta(undefined); setAhrefsUrls([]); setGscValidationError('')
                       setGscFileName('')
                       setAhrefsData([])
                       setAhrefsFileName('')
@@ -1435,7 +1504,7 @@ export default function SeoDashboard() {
                     <>
                       <div className="flex items-center justify-between mt-2">
                         <p className="text-xs text-green-600 font-medium">✓ {gscData.length} keywords indlæst</p>
-                        <button onClick={() => { setGscData([]); setGscPages([]); setGscPagesMeta(undefined); setGscFileName(''); setActivePanel('dashboard') }} className="text-xs text-gray-400 hover:text-red-500 transition">× Fjern</button>
+                        <button onClick={() => { setGscData([]); setGscPages([]); setGscPagesMeta(undefined); setGscValidationError(''); setGscFileName(''); setActivePanel('dashboard') }} className="text-xs text-gray-400 hover:text-red-500 transition">× Fjern</button>
                       </div>
                       <GscPreview data={gscData} />
                     </>
@@ -1752,7 +1821,9 @@ export default function SeoDashboard() {
                       </div>
                       <div className="mt-4 pt-4 border-t border-gray-100">
                         <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-1">SEO-potentiale <span className="normal-case font-normal text-gray-400">(højere = mere at hente)</span></p>
-                        {result.potentialScore === null && result.gscStats.impressions > 0 ? (
+                        {result.performance.status === 'valideringsfejl' ? (
+                          <p className="text-sm font-semibold text-red-600">{result.potentialNotes[0]}</p>
+                        ) : result.potentialScore === null && result.gscStats.impressions > 0 ? (
                           <div>
                             <p className="text-sm font-semibold text-amber-700">Utilstrækkelige data</p>
                             <p className="text-xs text-gray-500 mt-0.5">{result.potentialNotes[0]}</p>
@@ -2029,6 +2100,7 @@ export default function SeoDashboard() {
                   </div>
                   <p className="text-xs text-gray-400 mt-3">Status ændres aldrig automatisk – kun du godkender. Kun GODKENDTE søgeord aktiverer søgeordskontroller. Øvrige reducerer ikke on-page-scoren. Tekstligt overlap afgør aldrig forretningsmatch alene. Volumen i Ahrefs er ikke hele sandheden.</p>
                 </div>
+                {result.performance.status !== 'ingen' && <PerformancePanel perf={result.performance} />}
                 {result.overlap.available && <OverlapPanel overlap={result.overlap} gscDataNote={gscDataNote} />}
                 {Object.keys(result.serpAnalyses).length > 0 && (
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
@@ -2274,7 +2346,7 @@ export default function SeoDashboard() {
                                           Position #{row.position.toFixed(1)} · {row.impressions.toLocaleString()} impressions
                                         </div>
                                       </div>
-                                      <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs font-semibold rounded">+{estimatedBoost} clicks</span>
+                                      <span title="Teoretisk beregning (30 % CTR), ikke dokumenteret trafikpotentiale" className="px-2 py-1 bg-blue-100 text-blue-800 text-xs font-semibold rounded">teoretisk ≈ +{estimatedBoost} klik</span>
                                     </div>
                                   )
                                 })}

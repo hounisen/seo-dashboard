@@ -1,6 +1,6 @@
 // lib/seoEngine.ts
 // Regelbaseret beslutningsmotor – én fælles vurderingslogik til score, statusser og anbefalinger.
-import { analyzeOverlap, OverlapResult, GscPageRow, GscPageParse, AhrefsUrlRow, OVERLAP_LABEL } from './overlap'
+import { analyzeOverlap, buildPerformance, Performance, PeriodInfo, OverlapResult, GscPageRow, GscPageParse, AhrefsUrlRow, OVERLAP_LABEL } from './overlap'
 import { analyzeSerp, SerpAnalysis, SerpData, PageTypeInput, KIND_LABEL } from './serpAnalysis'
 
 export type KwStatus = 'afventer' | 'kandidat' | 'godkendt' | 'fravalgt'
@@ -23,7 +23,8 @@ export interface SeoInput {
   gsc?: GscRow[]
   gscMeta?: { url: string; period: string }
   gscPages?: GscPageRow[]
-  gscPagesMeta?: GscPageParse
+  gscPagesMeta?: GscPageParse & { periodInfo?: PeriodInfo }
+  gscValidationError?: string
   ahrefsUrls?: AhrefsUrlRow[]
   intentFit?: '' | 'match' | 'partial' | 'mismatch'
   businessContext?: string
@@ -165,6 +166,7 @@ export interface SeoResult {
   coverage: { items: CoverageItem[]; done: number; total: number }
   serpAnalyses: Record<string, SerpAnalysis>
   overlap: OverlapResult
+  performance: Performance
   focus: FocusResult
   analysisMode: 'ny' | 'eksisterende'
 }
@@ -618,7 +620,12 @@ export function analyzeSeo(input: SeoInput): SeoResult {
 
   // GSC-evidens for target (kun brugt som dokumentation, aldrig som mål i sig selv)
   // Ny side: GSC på domæneniveau er kun inspiration – aldrig dokumentation for sidens performance
-  const gscAll = input.gsc ?? []
+  // GSC-data: når en forespørgsel × side-fil er indlæst, bruges KUN den aktuelle periode for den analyserede URL.
+  const performance = buildPerformance(input.gscPages, input.gscPagesMeta?.periodInfo, input.url, input.gscValidationError)
+  const gscBlocked = performance.status === 'valideringsfejl'
+  const gscAll: GscRow[] = gscBlocked ? [] : (input.gscPages && input.gscPages.length > 0 && performance.currentLabel
+    ? performance.rows.filter(r => r.cur).map(r => ({ keyword: r.keyword, impressions: r.cur!.impressions, clicks: r.cur!.clicks, position: r.cur!.position ?? 0 }))
+    : (input.gsc ?? []))
   const gsc = isNew ? [] : gscAll
   const targetGsc = gsc.filter(r => r.impressions > 0 && countOccurrences(r.keyword, input.targetKeyword) > 0).sort((a, b) => b.impressions - a.impressions)[0]
   const gscGood = !!targetGsc && targetGsc.position <= 5 && targetGsc.clicks / targetGsc.impressions >= 0.8 * expectedCtr(targetGsc.position)
@@ -781,9 +788,18 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   const relevanceFormula = relevanceScore === null ? 'SEO-relevans: ikke beregnet – ingen godkendt søgeord' : `SEO-relevans: ${sum(relRows)} point af ${relDenom} mulige = ${relevanceScore} % (kun for godkendte søgeord)`
 
   // 3) Potentiale (GSC)
+  const potMeta = performance.currentLabel ? { url: input.url, period: performance.currentLabel } : input.gscMeta
   const potential = isNew
     ? { score: null as number | null, notes: ['Ny side: potentiale beregnes ikke ud fra GSC. Manglende URL-historik er ikke et negativt signal.'], confidence: 'ingen' as 'ingen' | 'lav' | 'ok', queries: 0, impressions: 0 }
-    : computePotential(gsc, text, intentFit, input.gscMeta, input.url)
+    : gscBlocked
+      ? { score: null as number | null, notes: [`Datavalideringsfejl: ${performance.error} Performanceberegninger (potentiale, CTR-analyse, klikestimater) er stoppet.`], confidence: 'ingen' as 'ingen' | 'lav' | 'ok', queries: 0, impressions: 0 }
+      : computePotential(gsc, text, intentFit, potMeta, input.url)
+  if (!isNew && !gscBlocked && performance.currentLabel) {
+    if (performance.currentLabel) potential.notes.push(`Beregnet ud fra den aktuelle periode (${performance.currentLabel}) for denne URL.`)
+    const t = performance.totals
+    if (t.cur && t.prev) potential.notes.push(`Udvikling (${performance.previousLabel} → ${performance.currentLabel}): klik ${t.prev.clicks.toLocaleString('da-DK')} → ${t.cur.clicks.toLocaleString('da-DK')}, eksponeringer ${t.prev.impressions.toLocaleString('da-DK')} → ${t.cur.impressions.toLocaleString('da-DK')} (summer af filens rækker, ikke validerede totaler).`)
+    potential.notes.push('Potentialet er et indikatortal ud fra placering og CTR – ikke et dokumenteret trafikpotentiale. Klikestimater er teoretiske.')
+  }
 
 
   // ── Søgeords-tabel ──────────────────────────────────────────────────────
@@ -804,7 +820,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   const targetSerp = serpAnalyses[normKw(input.targetKeyword)]
   const approvedSerp = [input.targetKeyword, ...extrasApproved].some(k => serpAnalyses[normKw(k)] && serpAnalyses[normKw(k)].organicCount >= 5)
   const gscEnough = potential.confidence === 'ok' || potential.confidence === 'lav'
-  const gscVerified = gscEnough && !!(input.gscMeta?.url || input.gscMeta?.period)
+  const gscVerified = gscEnough && !!(potMeta?.url || potMeta?.period)
   const coverageItems: CoverageItem[] = [
     { label: 'Title, meta og H1 målt', done: !!(title || meta || input.h1), note: 'Fra scrape/redigering' },
     { label: 'Indhold renset og talt', done: wordCount > 0, note: `${wordCount} ord` },
@@ -835,7 +851,8 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   if (focus.conclusion !== 'afventer') verdict.push(focus.headline + '.')
   if (gsc.length > 0 && potential.confidence === 'ingen') verdict.push('GSC-data er utilstrækkelige til at pege på nye muligheder.')
   if (isNew) verdict.push('Ny side: analysen bygger på indhold, forretningskontekst, Ahrefs og SERP. Manglende URL-historik er ikke et negativt signal.')
-  else if (gsc.length > 0 && (!input.gscMeta?.url || !input.gscMeta?.period)) verdict.push('GSC-data mangler angivelse af URL og/eller periode – muligheder kan ikke tilskrives siden med sikkerhed.')
+  else if (gscBlocked) verdict.push('Datavalideringsfejl i GSC-perioderne – performanceberegninger er stoppet.')
+  else if (gsc.length > 0 && (!potMeta?.url || !potMeta?.period)) verdict.push('GSC-data mangler angivelse af URL og/eller periode – muligheder kan ikke tilskrives siden med sikkerhed.')
   verdict.push(`Delvis analyse: ${coverageDone} af ${coverageItems.length} forhold er undersøgt – scoren er ikke en samlet SEO-vurdering.`)
   void nBeh
 
@@ -907,6 +924,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     coverage: { items: coverageItems, done: coverageDone, total: coverageItems.length },
     serpAnalyses,
     overlap,
+    performance,
     focus,
     analysisMode: isNew ? 'ny' : 'eksisterende',
   }
