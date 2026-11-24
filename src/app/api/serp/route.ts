@@ -33,9 +33,12 @@ export async function POST(req: NextRequest) {
     let json: any = null
     try { json = JSON.parse(text) } catch { /* ikke JSON */ }
     if (!res.ok) {
-      const msg = (json && (json.error || json.message)) || text.slice(0, 200) || `HTTP ${res.status}`
+      const msg = String((json && (json.error || json.message)) || text.slice(0, 200) || `HTTP ${res.status}`).slice(0, 180)
+      // Skeln mellem utilgængelige data (adgang/plan/kvote) og API-fejl (ugyldigt kald, serverfejl)
+      const unavailable = [401, 402, 403, 404, 429].includes(res.status)
       const hint = res.status === 401 || res.status === 403 ? ' Tjek at API-nøglen er gyldig og har adgang til SERP Overview.' : res.status === 429 ? ' For mange kald – prøv igen om lidt.' : ''
-      return NextResponse.json({ error: `Ahrefs-fejl (${res.status}): ${String(msg).slice(0, 180)}.${hint}` }, { status: 502 })
+      const label = unavailable ? 'SERP-data er utilgængelige' : 'API-fejl'
+      return NextResponse.json({ error: `${label} (Ahrefs ${res.status}): ${msg}.${hint}`, kind: unavailable ? 'utilgaengelig' : 'fejl' }, { status: 502 })
     }
     const positions = (json?.positions ?? []).map((p: any) => ({
       position: p.position,
@@ -51,6 +54,6 @@ export async function POST(req: NextRequest) {
     CACHE.set(key, { at: Date.now(), data })
     return NextResponse.json({ ...data, cached: false })
   } catch {
-    return NextResponse.json({ error: 'Kunne ikke nå Ahrefs. Tjek forbindelsen og prøv igen. Resten af analysen er upåvirket.' }, { status: 502 })
+    return NextResponse.json({ error: 'Netværksfejl: kunne ikke nå Ahrefs. Prøv igen. Resten af analysen er upåvirket.', kind: 'fejl' }, { status: 502 })
   }
 }

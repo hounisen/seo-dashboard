@@ -697,6 +697,8 @@ export default function SeoDashboard() {
   const [kwStatus, setKwStatus] = useState<Record<string, 'kandidat' | 'godkendt' | 'fravalgt'>>({})
   const [b2bOverride, setB2bOverride] = useState<Record<string, 'match' | 'delvist' | 'ikke'>>({})
   const [serpMap, setSerpMap] = useState<Record<string, SerpData>>({})
+  const [sortimentOk, setSortimentOk] = useState<Record<string, boolean>>({})
+  const [serpIssue, setSerpIssue] = useState<Record<string, 'fejl' | 'utilgaengelig'>>({})
   const [serpLoading, setSerpLoading] = useState('')
   const [serpError, setSerpError] = useState<Record<string, string>>({})
 
@@ -719,14 +721,20 @@ export default function SeoDashboard() {
     try {
       const res = await fetch('/api/serp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keyword: kw, country: 'DK', refresh }) })
       const d = await res.json()
-      if (!res.ok || d.error) { setSerpError(prev => ({ ...prev, [key]: d.error || 'SERP-analysen fejlede.' })); return }
+      if (!res.ok || d.error) {
+        setSerpError(prev => ({ ...prev, [key]: d.error || 'SERP-analysen fejlede.' }))
+        setSerpIssue(prev => ({ ...prev, [key]: d.kind === 'utilgaengelig' ? 'utilgaengelig' : 'fejl' }))
+        return
+      }
+      setSerpIssue(prev => { const n = { ...prev }; delete n[key]; return n })
       setSerpMap(prev => {
         const next = { ...prev, [key]: d as SerpData }
         try { localStorage.setItem('serpCache', JSON.stringify(next)) } catch { /* ignorer */ }
         return next
       })
     } catch {
-      setSerpError(prev => ({ ...prev, [key]: 'Kunne ikke nå serveren. Resten af analysen er upåvirket.' }))
+      setSerpError(prev => ({ ...prev, [key]: 'Netværksfejl: kunne ikke nå serveren. Resten af analysen er upåvirket.' }))
+      setSerpIssue(prev => ({ ...prev, [key]: 'fejl' }))
     } finally { setSerpLoading('') }
   }, [])
   const [kwOverview, setKwOverview] = useState<KwOverviewRow[]>([])
@@ -753,11 +761,11 @@ export default function SeoDashboard() {
       gsc: gscData,
       intentFit: form.intentFit,
       businessContext: form.businessContext,
-      keywordStatus: kwStatus, b2bOverride, analysisMode: form.analysisMode, pageType: form.pageType, gscMeta: { url: form.gscUrl, period: form.gscPeriod }, serp: serpMap,
+      keywordStatus: kwStatus, b2bOverride, sortimentConfirmed: sortimentOk, serpIssues: serpIssue, analysisMode: form.analysisMode, pageType: form.pageType, gscMeta: { url: form.gscUrl, period: form.gscPeriod }, serp: serpMap,
       kwData: kwOverview.map(k => ({ keyword: k.keyword, volume: k.volume, difficulty: k.difficulty, intents: k.intents })),
     }
     setResult(analyzeSeo(input))
-  }, [form, gscData, kwOverview, kwStatus, serpMap, b2bOverride])
+  }, [form, gscData, kwOverview, kwStatus, serpMap, b2bOverride, sortimentOk, serpIssue])
 
   // Recalculate originalResult when keywords or scraped snapshot changes
   useEffect(() => {
@@ -769,11 +777,11 @@ export default function SeoDashboard() {
       pageTitle: scraped.pageTitle, metaDescription: scraped.metaDescription,
       h1: scraped.h1, bodyContent: scraped.bodyContent,
       structuredDataTypes: form.structuredDataTypes,
-      gsc: gscData, intentFit: form.intentFit, businessContext: form.businessContext, keywordStatus: kwStatus, b2bOverride, analysisMode: form.analysisMode, pageType: form.pageType, gscMeta: { url: form.gscUrl, period: form.gscPeriod }, serp: serpMap,
+      gsc: gscData, intentFit: form.intentFit, businessContext: form.businessContext, keywordStatus: kwStatus, b2bOverride, sortimentConfirmed: sortimentOk, serpIssues: serpIssue, analysisMode: form.analysisMode, pageType: form.pageType, gscMeta: { url: form.gscUrl, period: form.gscPeriod }, serp: serpMap,
       kwData: kwOverview.map(k => ({ keyword: k.keyword, volume: k.volume, difficulty: k.difficulty, intents: k.intents })),
     }))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.targetKeyword, form.semanticKeywords, scraped, form.structuredDataTypes, gscData, form.intentFit, form.businessContext, kwOverview, kwStatus, serpMap, b2bOverride, form.analysisMode, form.pageType, form.gscUrl, form.gscPeriod])
+  }, [form.targetKeyword, form.semanticKeywords, scraped, form.structuredDataTypes, gscData, form.intentFit, form.businessContext, kwOverview, kwStatus, serpMap, b2bOverride, sortimentOk, serpIssue, form.analysisMode, form.pageType, form.gscUrl, form.gscPeriod])
 
   const updateForm = useCallback((key: keyof FormState, val: string) => {
     setForm(prev => ({ ...prev, [key]: val }))
@@ -1748,6 +1756,7 @@ export default function SeoDashboard() {
                 <div className={`rounded-2xl p-6 shadow-sm border ${result.focus.conclusion === 'godkendt' ? 'bg-emerald-50 border-emerald-200' : result.focus.conclusion === 'afventer' ? 'bg-gray-50 border-gray-200' : 'bg-blue-50 border-blue-200'}`}>
                   <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-1">Søgeordsfokus</p>
                   <h3 className="text-base font-bold text-gray-800">{result.focus.headline}</h3>
+                  {result.focus.conclusion === 'primaer' && !result.focus.comparable && <p className="text-xs font-semibold text-amber-700 mt-1">Ikke verificeret: øvrige kandidater kan endnu ikke sammenlignes på et tilstrækkeligt grundlag.</p>}
                   <p className="text-xs text-gray-600 mt-1">{result.focus.reason}</p>
                   <div className="overflow-x-auto -mx-2 mt-4">
                     <table className="w-full text-sm min-w-[720px]">
@@ -1769,7 +1778,8 @@ export default function SeoDashboard() {
                             <td className="py-2 px-3 tabular-nums text-gray-600">{c.volume ?? '–'}</td>
                             <td className="py-2 px-3 tabular-nums text-gray-600">{c.kd ?? '–'}</td>
                             <td className="py-2 px-3 text-xs">
-                              {c.serp ? (<>
+                              {c.serpState === 'tom' ? (<span className="text-amber-600 font-semibold">Ahrefs gav ingen SERP-resultater{(c.volume ?? 0) > 0 ? <span className="block font-normal text-gray-400">Ahrefs viser dog volumen {c.volume} – tomt SERP skyldes ikke nul søgevolumen</span> : null}</span>)
+                                : c.serp ? (<>
                                 <span className={`font-semibold ${c.serp.verdict === 'primaer' ? 'text-emerald-600' : c.serp.verdict === 'sekundaer' ? 'text-blue-600' : c.serp.verdict === 'fravaelg' ? 'text-red-500' : 'text-amber-600'}`}>
                                   {c.serp.verdict === 'primaer' ? 'Passer (primær)' : c.serp.verdict === 'sekundaer' ? 'Delvist (sekundær)' : c.serp.verdict === 'fravaelg' ? 'Passer ikke' : 'Usikker'}
                                 </span>
@@ -1779,6 +1789,7 @@ export default function SeoDashboard() {
                                 {serpLoading === key ? 'Henter…' : serpMap[key] ? 'Opdatér SERP' : 'Analysér SERP'}
                               </button>
                               {serpError[key] && <div className="text-red-500 mt-1 max-w-[220px]">{serpError[key]}</div>}
+                              {!c.serp && c.serpState !== 'ikke-analyseret' && c.serpState !== 'tom' && !serpError[key] && <div className="text-red-500 mt-1">{c.serpState === 'utilgaengelig' ? 'SERP-data utilgængelige' : 'SERP-kald fejlede'}</div>}
                             </td>
                             <td className="py-2 px-3 text-xs min-w-[220px]">
                               <span className={`font-bold px-2 py-0.5 rounded-full ${c.b2b.overall === 'MATCH' ? 'bg-emerald-100 text-emerald-700' : c.b2b.overall === 'DELVIST MATCH' ? 'bg-amber-100 text-amber-700' : c.b2b.overall === 'IKKE MATCH' ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-600'}`}>{c.b2b.overall}</span>
@@ -1788,7 +1799,7 @@ export default function SeoDashboard() {
                                 <summary className="cursor-pointer text-blue-600">Vis kriterier</summary>
                                 <ul className="mt-1 space-y-1">
                                   {c.b2b.criteria.map(cr => (
-                                    <li key={cr.key}><b className={cr.verdict === 'match' ? 'text-emerald-600' : cr.verdict === 'delvist' ? 'text-amber-600' : cr.verdict === 'ikke' ? 'text-red-500' : 'text-gray-400'}>{cr.label}: {cr.verdict === 'match' ? 'MATCH' : cr.verdict === 'delvist' ? 'DELVIST' : cr.verdict === 'ikke' ? 'IKKE MATCH' : 'IKKE VURDERET'}</b><div className="text-gray-500">{cr.note}</div></li>
+                                    <li key={cr.key}><b className={cr.verdict === 'match' ? 'text-emerald-600' : cr.verdict === 'delvist' ? 'text-amber-600' : cr.verdict === 'ikke' ? 'text-red-500' : 'text-gray-400'}>{cr.label}: {cr.verdict === 'match' ? 'MATCH' : cr.verdict === 'delvist' ? 'DELVIST' : cr.verdict === 'ikke' ? 'IKKE MATCH' : cr.verdict === 'ikke-verificeret' ? 'IKKE VERIFICERET' : 'IKKE VURDERET'}</b><div className="text-gray-500">{cr.note}</div></li>
                                   ))}
                                 </ul>
                               </details>
@@ -1797,6 +1808,7 @@ export default function SeoDashboard() {
                                 <button onClick={() => setB2bOverride(prev => ({ ...prev, [key]: 'match' }))} className="text-emerald-600 hover:underline">Match</button>
                                 <button onClick={() => setB2bOverride(prev => ({ ...prev, [key]: 'delvist' }))} className="text-amber-600 hover:underline">Delvist</button>
                                 <button onClick={() => setB2bOverride(prev => ({ ...prev, [key]: 'ikke' }))} className="text-red-500 hover:underline">Ikke</button>
+                                <button onClick={() => setSortimentOk(prev => { const n = { ...prev }; if (n[key]) delete n[key]; else n[key] = true; return n })} className="text-gray-600 hover:underline">{sortimentOk[key] ? 'Fjern sortimentsbekræftelse' : 'Bekræft sortiment'}</button>
                                 {c.b2b.overridden && <button onClick={() => setB2bOverride(prev => { const n = { ...prev }; delete n[key]; return n })} className="text-gray-400 hover:underline">Nulstil</button>}
                               </div>
                               <div className="text-gray-400 mt-1">Tekstligt overlap: {c.context === 'sortiment' ? 'ja (indikation)' : c.context === 'afgrænset' ? 'med afgrænsning' : c.context === 'ikke-nævnt' ? 'nej' : 'ingen kontekst'} – afgør aldrig match alene</div>
@@ -1804,7 +1816,7 @@ export default function SeoDashboard() {
                             <td className="py-2 px-3 text-xs">
                               <span className={`font-bold px-2 py-0.5 rounded-full ${stCls[c.status]}`}>{stLabel[c.status]}</span>
                               <div className={`mt-1 font-semibold ${c.role === 'primaer' ? 'text-emerald-700' : c.role === 'sekundaer' ? 'text-blue-600' : c.role === 'fravaelg' ? 'text-red-500' : c.role === 'anden-side' ? 'text-purple-600' : 'text-gray-400'}`}>
-                                Anbefaling: {c.role === 'primaer' ? 'Primær kandidat' : c.role === 'sekundaer' ? 'Sekundær' : c.role === 'fravaelg' ? 'Fravælg' : c.role === 'anden-side' ? 'Målret en anden side' : 'Afventer grundlag'}
+                                Anbefaling: {c.role === 'primaer' ? (c.provisional ? 'Foreløbig primær kandidat' : 'Primær kandidat') : c.role === 'sekundaer' ? 'Sekundær' : c.role === 'fravaelg' ? 'Fravælg' : c.role === 'anden-side' ? 'Målret en anden side' : 'Afventer grundlag'}
                               </div>
                               <div className="flex flex-wrap gap-2 mt-1">
                                 <button onClick={() => setKwStatus(prev => ({ ...prev, [key]: 'kandidat' }))} className="text-blue-600 hover:underline">Kandidat</button>

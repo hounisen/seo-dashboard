@@ -21,7 +21,7 @@ export interface SerpData {
   positions: SerpPosition[]
 }
 
-export type PageKind = 'kategori' | 'produkt' | 'artikel' | 'forside' | 'service' | 'ukendt'
+export type PageKind = 'kategori' | 'produkt' | 'artikel' | 'forside' | 'landing' | 'service' | 'ukendt'
 export type PageTypeInput = '' | 'kategori' | 'produkt' | 'artikel' | 'branche' | 'service'
 
 export interface ClassifiedResult {
@@ -44,7 +44,9 @@ export interface SerpAnalysis {
   shares: Partial<Record<PageKind, number>>
   dominant: PageKind
   probableIntent: string
-  compatibleShare: number | null // andel resultater, der er samme sidetype som den analyserede side
+  compatibleShare: number | null // andel resultater, der direkte er samme sidetype som den analyserede side
+  adjacentShare: number | null // andel med nærliggende sidetype (delvist funktionelt match)
+  status: 'ok' | 'tom'
   b2cSignals: number
   verdict: 'primaer' | 'sekundaer' | 'fravaelg' | 'usikker'
   uncertain: boolean
@@ -56,6 +58,7 @@ export const KIND_LABEL: Record<PageKind, string> = {
   produkt: 'Produktside',
   artikel: 'Artikel/guide',
   forside: 'Forside',
+  landing: 'Landingpage',
   service: 'Service',
   ukendt: 'Ukendt',
 }
@@ -64,7 +67,8 @@ function classifyOne(p: SerpPosition): { kind: PageKind; basis: 'ahrefs' | 'heur
   const pt = (p.pageType || '').toLowerCase()
   if (pt) {
     if (pt.includes('homepage') || pt.includes('/core_page')) return { kind: 'forside', basis: 'ahrefs' }
-    if (pt.includes('listing_collection') || pt.includes('landing_page')) return { kind: 'kategori', basis: 'ahrefs' }
+    if (pt.includes('listing_collection')) return { kind: 'kategori', basis: 'ahrefs' }
+    if (pt.includes('landing_page')) return { kind: 'landing', basis: 'ahrefs' }
     if (pt.includes('product_detail') || pt.includes('/product') && !pt.includes('listing') && !pt.includes('landing')) return { kind: 'produkt', basis: 'ahrefs' }
     if (pt.includes('/article') || pt.includes('blog') || pt.includes('guide') || pt.includes('how_to') || pt.includes('news')) return { kind: 'artikel', basis: 'ahrefs' }
     if (pt.includes('service')) return { kind: 'service', basis: 'ahrefs' }
@@ -85,10 +89,20 @@ function classifyOne(p: SerpPosition): { kind: PageKind; basis: 'ahrefs' | 'heur
 function compatibleKinds(pageType: PageTypeInput): PageKind[] {
   switch (pageType) {
     case 'kategori': return ['kategori']
-    case 'branche': return ['kategori', 'forside']
+    case 'branche': return ['landing']
     case 'produkt': return ['produkt']
     case 'artikel': return ['artikel']
     case 'service': return ['service']
+    default: return []
+  }
+}
+
+// Nærliggende sidetyper: har en delvis lignende funktion, men er ikke automatisk samme sidetype.
+function adjacentKinds(pageType: PageTypeInput): PageKind[] {
+  switch (pageType) {
+    case 'kategori': return ['landing']
+    case 'branche': return ['kategori', 'forside', 'service']
+    case 'service': return ['landing']
     default: return []
   }
 }
@@ -110,14 +124,16 @@ export function analyzeSerp(data: SerpData, pageType: PageTypeInput): SerpAnalys
 
   const intent =
     dominant === 'artikel' ? 'Informativ (artikler/guides dominerer)'
-    : dominant === 'kategori' || dominant === 'produkt' || dominant === 'forside' ? 'Kommerciel/transaktionel (butikker og kategorisider dominerer)'
+    : dominant === 'kategori' || dominant === 'produkt' || dominant === 'forside' || dominant === 'landing' ? 'Kommerciel/transaktionel (butikker og kategorisider dominerer)'
     : dominant === 'service' ? 'Service/leverandør' : 'Uklar'
 
   const compat = compatibleKinds(pageType)
   const compatibleShare = compat.length > 0 && n > 0 ? results.filter(r => compat.includes(r.kind)).length / n : null
+  const adj = adjacentKinds(pageType)
+  const adjacentShare = compat.length > 0 && n > 0 ? results.filter(r => adj.includes(r.kind)).length / n : null
 
   const reasons: string[] = []
-  if (n === 0) reasons.push('Ahrefs har ingen organiske SERP-resultater for søgeordet (typisk fordi søgeordet ikke har registreret søgevolumen).')
+  if (n === 0) reasons.push('Ahrefs returnerede ingen organiske resultater for søgeordet. Det er ikke det samme som nul søgevolumen eller manglende søgning – søgebilledet kan blot ikke bekræftes herfra.')
   else {
     const parts = Object.entries(shares).filter(([, v]) => (v ?? 0) > 0).sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
       .map(([k, v]) => `${Math.round((v ?? 0) * n)} × ${KIND_LABEL[k as PageKind].toLowerCase()}`)
@@ -129,13 +145,15 @@ export function analyzeSerp(data: SerpData, pageType: PageTypeInput): SerpAnalys
 
   let verdict: SerpAnalysis['verdict'] = 'usikker'
   if (n >= 5 && compatibleShare !== null) {
+    const total = compatibleShare + (adjacentShare ?? 0)
     if (compatibleShare >= 0.5) verdict = 'primaer'
-    else if (compatibleShare >= 0.3) verdict = 'sekundaer'
+    else if (compatibleShare >= 0.3 || total >= 0.5) verdict = 'sekundaer'
     else verdict = 'fravaelg'
-    reasons.push(`${Math.round(compatibleShare * 100)} % af resultaterne er samme sidetype som din side (${pageType}).`)
+    reasons.push(`${Math.round(compatibleShare * 100)} % af resultaterne er direkte samme sidetype som din side (${pageType})${(adjacentShare ?? 0) > 0 ? `, yderligere ${Math.round((adjacentShare ?? 0) * 100)} % har en nærliggende sidetype med delvist samme funktion` : ''}.`)
+    if (pageType === 'branche' && compatibleShare < 0.5) reasons.push('En branchelandingpage har ikke automatisk samme funktion som kategorisider, produktlister eller forsider – vurdér selv, om din side kan opfylde samme behov.')
   } else if (n >= 5 && compatibleShare === null) {
     reasons.push('Angiv sidetype (kategori, produkt, artikel, branche eller service) for at vurdere, om SERP passer til siden.')
   }
 
-  return { keyword: data.keyword, fetchedAt: data.fetchedAt, dataDate: organic[0]?.updateDate ?? data.positions[0]?.updateDate ?? '', organicCount: n, results, shares, dominant, probableIntent: intent, compatibleShare, b2cSignals, verdict, uncertain, reasons }
+  return { keyword: data.keyword, fetchedAt: data.fetchedAt, dataDate: organic[0]?.updateDate ?? data.positions[0]?.updateDate ?? '', organicCount: n, results, shares, dominant, probableIntent: intent, compatibleShare, adjacentShare, status: n === 0 ? 'tom' : 'ok', b2cSignals, verdict, uncertain, reasons }
 }

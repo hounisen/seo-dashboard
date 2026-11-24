@@ -28,6 +28,8 @@ export interface SeoInput {
   serp?: Record<string, SerpData>
   analysisMode?: 'ny' | 'eksisterende'
   b2bOverride?: Record<string, 'match' | 'delvist' | 'ikke'>
+  sortimentConfirmed?: Record<string, boolean>
+  serpIssues?: Record<string, 'fejl' | 'utilgaengelig'>
   kwData?: { keyword: string; volume: number; difficulty: number | null; intents: string }[]
 }
 
@@ -65,7 +67,8 @@ export interface RecommendationItem {
   action: string
 }
 
-export type CriterionVerdict = 'match' | 'delvist' | 'ikke' | 'ikke-vurderet'
+export type CriterionVerdict = 'match' | 'delvist' | 'ikke' | 'ikke-vurderet' | 'ikke-verificeret'
+export type SerpState = 'ikke-analyseret' | 'ok' | 'tom' | 'utilgaengelig' | 'fejl'
 export interface B2BCriterion { key: 'malgruppe' | 'sortiment' | 'intention' | 'landingsside' | 'konvertering'; label: string; verdict: CriterionVerdict; note: string }
 export interface B2BAssessment {
   overall: 'MATCH' | 'DELVIST MATCH' | 'IKKE MATCH' | 'IKKE VURDERET'
@@ -89,6 +92,8 @@ export interface FocusCandidate {
   b2b: B2BAssessment
   role: KwRole
   roleReason: string
+  provisional: boolean
+  serpState: SerpState
   serp: { verdict: SerpAnalysis['verdict']; uncertain: boolean; summary: string } | null
   onPage: boolean
 }
@@ -98,6 +103,8 @@ export interface FocusResult {
   headline: string
   reason: string
   candidates: FocusCandidate[]
+  comparable: boolean
+  uncompared: string[]
 }
 
 export interface ScoreRow {
@@ -314,13 +321,20 @@ function serpSummary(a: SerpAnalysis): string {
 // ── B2B-vurdering pr. søgeord (fem selvstændige kriterier) ───────────────────────────────────
 function assessB2B(
   kw: string, intents: string, a: SerpAnalysis | null, pageType: PageTypeInput,
-  ctx: { fit: string; limit: string }, override?: 'match' | 'delvist' | 'ikke',
+  ctx: { fit: string; limit: string }, override: 'match' | 'delvist' | 'ikke' | undefined,
+  serpState: SerpState, volume: number | null, sortimentConfirmed: boolean,
 ): B2BAssessment {
   const n = a?.organicCount ?? 0
   const serpOk = !!a && n >= 5
   const basis: B2BAssessment['basis'] = serpOk ? (a!.uncertain ? 'serp-usikker' : 'serp') : 'estimat'
   const basisLabel = basis === 'serp' ? 'SERP-understøttet' : basis === 'serp-usikker' ? 'SERP-understøttet, men usikker klassifikation' : 'Foreløbigt estimat – ikke verificeret mod SERP'
   const NV = 'ikke-vurderet' as const
+  const unknown = (v: CriterionVerdict) => v === 'ikke-vurderet' || v === 'ikke-verificeret'
+  const noSerp = serpState === 'tom'
+    ? `Ahrefs returnerede ingen organiske resultater${volume != null && volume > 0 ? ` – selvom Ahrefs viser volumen ${volume}. Det kan ikke forklares med nul søgevolumen; søgebilledet kan ikke bekræftes herfra` : ''}.`
+    : serpState === 'utilgaengelig' ? 'SERP-data er utilgængelige (adgang, plan eller kvote) – ikke en vurdering af søgeordet.'
+    : serpState === 'fejl' ? 'SERP-kaldet fejlede (API- eller netværksfejl) – prøv igen. Ikke en vurdering af søgeordet.'
+    : 'Kræver SERP – klik "Analysér SERP".'
   const crit: B2BCriterion[] = []
   const il = (intents || '').toLowerCase()
 
@@ -330,20 +344,21 @@ function assessB2B(
     const share = a!.b2cSignals / n
     aud = { key: 'malgruppe', label: 'Målgruppe', verdict: share >= 0.4 ? 'ikke' : a!.b2cSignals > 0 ? 'delvist' : 'match',
       note: a!.b2cSignals === 0 ? 'Ingen resultater i top 10 har forbrugersignaler i titlen.' : `${a!.b2cSignals} af ${n} resultater har forbruger-/private-signaler i titlen.` }
-  } else aud = { key: 'malgruppe', label: 'Målgruppe', verdict: NV, note: 'Kræver SERP (resultaternes titler og sidetyper).' }
+  } else aud = { key: 'malgruppe', label: 'Målgruppe', verdict: NV, note: noSerp }
   crit.push(aud)
 
-  // 2. Sortimentsmatch – ordoverlap alene kan højst give DELVIST; MATCH kræver SERP-støtte
+  // 2. Sortimentsmatch – match på ord, titel og sidetype er kun indikationer.
+  //    MATCH kræver, at DU har dokumenteret, at Hounisens faktiske sortiment opfylder søgebehovet.
   const ws = sigWords(kw)
   const hits = (t: string) => ws.length ? ws.filter(w => wordHit(t, w)).length / ws.length : 0
   const fitShare = hits(ctx.fit), limShare = hits(ctx.limit)
+  const SL = 'Sortimentsmatch'
   let sor: B2BCriterion
-  if (!ctx.fit.trim() && !ctx.limit.trim()) sor = { key: 'sortiment', label: 'Sortimentsmatch', verdict: NV, note: 'Ingen forretningskontekst angivet.' }
-  else if (ctx.limit.trim() && limShare >= 0.5) sor = { key: 'sortiment', label: 'Sortimentsmatch', verdict: 'delvist', note: 'Ordene findes i din afgrænsning – kan betyde, at Hounisen ikke leverer det. Vurdér selv.' }
-  else if (fitShare >= 0.67) sor = { key: 'sortiment', label: 'Sortimentsmatch', verdict: serpOk && a!.compatibleShare !== null && a!.compatibleShare >= 0.5 ? 'match' : 'delvist',
-    note: serpOk && a!.compatibleShare !== null && a!.compatibleShare >= 0.5 ? 'Ordoverlap med sortimentet, og SERP viser sidetyper, som din side kan matche. Ordoverlap alene er ikke bevis for, at produkterne kan leveres.' : 'Ordoverlap med forretningsbeskrivelsen er kun en indikation og er ikke bevis for, at produkterne kan leveres.' }
-  else if (fitShare > 0) sor = { key: 'sortiment', label: 'Sortimentsmatch', verdict: 'delvist', note: 'Kun delvist ordoverlap med forretningsbeskrivelsen – ikke alt i søgningen er nævnt som sortiment.' }
-  else sor = { key: 'sortiment', label: 'Sortimentsmatch', verdict: NV, note: 'Søgningen er ikke nævnt i forretningskonteksten – kan ikke afgøres automatisk.' }
+  if (sortimentConfirmed) sor = { key: 'sortiment', label: SL, verdict: 'match', note: 'Bekræftet af dig: Hounisens faktiske sortiment opfylder søgebehovet.' }
+  else if (ctx.limit.trim() && limShare >= 0.5) sor = { key: 'sortiment', label: SL, verdict: 'delvist', note: 'Ordene findes i din afgrænsning – kan betyde, at Hounisen ikke leverer det. Vurdér selv.' }
+  else if (fitShare >= 0.67) sor = { key: 'sortiment', label: SL, verdict: 'delvist', note: 'Ordoverlap med forretningsbeskrivelsen er kun en indikation. MATCH kræver, at du bekræfter, at sortimentet faktisk opfylder søgebehovet.' }
+  else if (!ctx.fit.trim() && !ctx.limit.trim()) sor = { key: 'sortiment', label: SL, verdict: 'ikke-verificeret', note: 'Ingen forretningskontekst angivet.' }
+  else sor = { key: 'sortiment', label: SL, verdict: 'ikke-verificeret', note: fitShare > 0 ? 'Kun svagt ordoverlap med forretningsbeskrivelsen – sortimentsmatch er ikke dokumenteret.' : 'Søgningen er ikke nævnt i forretningskonteksten – sortimentsmatch er ikke dokumenteret.' }
   crit.push(sor)
 
   // 3. Søgeintention
@@ -356,18 +371,23 @@ function assessB2B(
     else if (informative) v = pageType === 'artikel' ? 'match' : pageType === '' ? NV : 'ikke'
     else v = pageType === 'artikel' ? 'ikke' : 'match'
     int = { key: 'intention', label: 'Søgeintention', verdict: v, note: `${a!.probableIntent} (${Math.round(dom * 100)} % ${KIND_LABEL[a!.dominant].toLowerCase()}).` }
-  } else if (/commercial|transactional/.test(il)) int = { key: 'intention', label: 'Søgeintention', verdict: 'delvist', note: `Foreløbigt: Ahrefs angiver «${intents}». Ikke verificeret mod SERP.` }
+  } else if (/commercial|transactional/.test(il)) int = { key: 'intention', label: 'Søgeintention', verdict: 'delvist', note: `Foreløbigt: Ahrefs angiver «${intents}». Ikke verificeret mod SERP. ${serpState !== 'ikke-analyseret' ? noSerp : ''}` }
   else if (/informational/.test(il)) int = { key: 'intention', label: 'Søgeintention', verdict: 'delvist', note: `Foreløbigt: Ahrefs angiver «${intents}» (informativ). Ikke verificeret mod SERP.` }
-  else int = { key: 'intention', label: 'Søgeintention', verdict: NV, note: 'Ingen SERP- eller intent-data.' }
+  else int = { key: 'intention', label: 'Søgeintention', verdict: NV, note: `Ingen intent-data. ${noSerp}` }
   crit.push(int)
 
-  // 4. Landingssidematch
+  // 4. Landingssidematch – konkret funktionelt match, ikke bare "lignende" sidetype
   let lan: B2BCriterion
   if (serpOk && pageType !== '' && a!.compatibleShare !== null) {
-    const s = a!.compatibleShare
-    lan = { key: 'landingsside', label: 'Landingssidematch', verdict: s >= 0.5 ? 'match' : s >= 0.3 ? 'delvist' : 'ikke',
-      note: `${Math.round(s * 100)} % af resultaterne har samme sidetype som din side (${pageType}).${s < 0.3 ? ' Søgningen passer sandsynligvis bedre til en anden side, fx en mere specifik kategori eller produktside.' : ''}` }
-  } else lan = { key: 'landingsside', label: 'Landingssidematch', verdict: NV, note: pageType === '' ? 'Angiv sidetype for at vurdere match.' : 'Kræver SERP.' }
+    const d = a!.compatibleShare, adj = a!.adjacentShare ?? 0
+    const pct = (x: number) => `${Math.round(x * 100)} %`
+    const v: CriterionVerdict = d >= 0.5 ? 'match' : d + adj >= 0.3 ? 'delvist' : 'ikke'
+    const base = `Direkte samme sidetype som din side (${pageType}): ${pct(d)}. Nærliggende sidetyper med delvist samme funktion: ${pct(adj)}.`
+    const why = v === 'match' ? ' Flertallet af resultaterne opfylder samme funktion som din side.'
+      : v === 'delvist' ? (pageType === 'branche' ? ' En branchelandingpage har ikke automatisk samme funktion som kategorisider, produktlister eller forsider – vurdér selv, om din side kan opfylde samme behov.' : ' Kun delvist samme funktion – vurdér selv.')
+      : ' Søgningen passer sandsynligvis bedre til en anden side, fx en mere specifik kategori eller produktside.'
+    lan = { key: 'landingsside', label: 'Landingssidematch', verdict: v, note: base + why }
+  } else lan = { key: 'landingsside', label: 'Landingssidematch', verdict: NV, note: pageType === '' ? 'Angiv sidetype for at vurdere match.' : noSerp }
   crit.push(lan)
 
   // 5. Konverteringsrelevans – afledt af de øvrige, aldrig gættet
@@ -375,11 +395,11 @@ function assessB2B(
   let con: B2BCriterion
   if (dep.some(c => c.verdict === 'ikke')) con = { key: 'konvertering', label: 'Konverteringsrelevans', verdict: 'ikke', note: 'Mindst ét grundkriterium (målgruppe, sortiment, intention) er ikke match.' }
   else if (dep.every(c => c.verdict === 'match')) con = { key: 'konvertering', label: 'Konverteringsrelevans', verdict: 'match', note: 'Målgruppe, sortiment og intention matcher. Sandsynlig, men ikke garanteret, B2B-trafik.' }
-  else if (dep.every(c => c.verdict !== NV)) con = { key: 'konvertering', label: 'Konverteringsrelevans', verdict: 'delvist', note: 'Grundkriterierne matcher kun delvist.' }
+  else if (dep.every(c => !unknown(c.verdict))) con = { key: 'konvertering', label: 'Konverteringsrelevans', verdict: 'delvist', note: 'Grundkriterierne matcher kun delvist.' }
   else con = { key: 'konvertering', label: 'Konverteringsrelevans', verdict: NV, note: 'Mangler grundlag (målgruppe, sortiment eller intention er ikke vurderet).' }
   crit.push(con)
 
-  const assessed = crit.filter(c => c.verdict !== NV)
+  const assessed = crit.filter(c => !unknown(c.verdict))
   let overall: B2BAssessment['overall']
   if (assessed.length < 3) overall = 'IKKE VURDERET'
   else if (aud.verdict === 'ikke' || sor.verdict === 'ikke' || int.verdict === 'ikke') overall = 'IKKE MATCH'
@@ -388,9 +408,9 @@ function assessB2B(
   let overridden = false
   if (override) { overridden = true; overall = override === 'match' ? 'MATCH' : override === 'delvist' ? 'DELVIST MATCH' : 'IKKE MATCH' }
 
-  const missing = crit.filter(c => c.verdict === NV).map(c => c.label.toLowerCase())
+  const missing = crit.filter(c => unknown(c.verdict)).map(c => c.label.toLowerCase())
   const summary = overridden ? 'Vurdering ændret manuelt af dig.'
-    : overall === 'IKKE VURDERET' ? `For få kriterier kan vurderes (${assessed.length} af 5). ${basis === 'estimat' ? 'Analysér SERP for at kvalificere vurderingen.' : ''}`
+    : overall === 'IKKE VURDERET' ? `For få kriterier kan vurderes (${assessed.length} af 5). ${basis === 'estimat' ? noSerp : ''}`
     : `${basis === 'estimat' ? 'Foreløbigt estimat. ' : ''}${assessed.length} af 5 kriterier vurderet${missing.length ? ` (mangler: ${missing.join(', ')})` : ''}.`
   return { overall, basis, basisLabel, criteria: crit, summary, overridden }
 }
@@ -416,10 +436,11 @@ function computeFocus(
     const status: KwStatus = statusMap[normKw(k)] ?? 'afventer'
     const a = analyses[normKw(k)] ?? null
     const volume = d ? d.volume : null
-    const b2b = assessB2B(k, d ? d.intents : '', a, pageType, ctx, input.b2bOverride?.[normKw(k)])
+    const serpState: SerpState = a ? (a.organicCount === 0 ? 'tom' : 'ok') : (input.serpIssues?.[normKw(k)] ?? 'ikke-analyseret')
+    const b2b = assessB2B(k, d ? d.intents : '', a, pageType, ctx, input.b2bOverride?.[normKw(k)], serpState, volume, !!input.sortimentConfirmed?.[normKw(k)])
     return {
       keyword: k, volume, kd: d ? d.difficulty : null, intents: d ? d.intents : '', context, status,
-      suggested: 'afventer' as KwStatus, rationale: '', role: 'afventer' as KwRole, roleReason: '',
+      suggested: 'afventer' as KwStatus, rationale: '', role: 'afventer' as KwRole, roleReason: '', provisional: false, serpState,
       serp: a ? { verdict: a.verdict, uncertain: a.uncertain, summary: serpSummary(a) } : null,
       b2b, onPage: containsKeyword(text, k),
     }
@@ -440,13 +461,21 @@ function computeFocus(
   const pool = candidates.filter(c => c.role === 'sekundaer' && c.b2b.basis === 'serp' && ((c.volume ?? 0) > 0 || c.status === 'godkendt'))
   pool.sort((x, y) => matchScore(y.b2b) - matchScore(x.b2b) || (statusMap[normKw(y.keyword)] === 'godkendt' ? 1 : 0) - (statusMap[normKw(x.keyword)] === 'godkendt' ? 1 : 0) || (y.volume ?? 0) - (x.volume ?? 0))
   const best = pool[0]
-  if (best) { best.role = 'primaer'; best.roleReason = `Bedste B2B- og SERP-match blandt kandidaterne (${best.b2b.overall}). Rangeret på match, ikke på volumen alene.${best.b2b.overall !== 'MATCH' ? ' Kun delvist match – godkend først efter din egen vurdering.' : ''}` }
+  const STATE_LABEL: Record<SerpState, string> = { 'ikke-analyseret': 'SERP ikke analyseret', ok: 'SERP analyseret', tom: 'Ahrefs gav ingen SERP-resultater', utilgaengelig: 'SERP-data utilgængelige', fejl: 'SERP-kald fejlede' }
+  const uncompared = best ? candidates.filter(c => c !== best && c.role !== 'fravaelg' && (c.b2b.basis === 'estimat' || c.b2b.overall === 'IKKE VURDERET')) : []
+  const comparable = uncompared.length === 0
+  if (best) {
+    best.role = 'primaer'
+    best.provisional = !comparable
+    best.roleReason = `${!comparable ? 'Foreløbig: ' : ''}Bedste B2B- og SERP-match blandt de kandidater, der kan sammenlignes (${best.b2b.overall}). Rangeret på match, ikke på volumen alene.${best.b2b.overall !== 'MATCH' ? ' Sortimentet er ikke dokumenteret – godkend først efter din egen vurdering.' : ''}${!comparable ? ` Ikke verificeret mod ${uncompared.length} øvrig(e) kandidat(er).` : ''}`
+  }
 
   for (const c of candidates) {
     const why: string[] = []
     if (c.volume != null) why.push(`volumen ${c.volume}${c.kd != null ? `, KD ${c.kd}` : ''}`); else why.push('ingen registreret volumen i de indlæste Ahrefs-data')
     if (c.intents) why.push(`Ahrefs-intent: ${c.intents}`)
-    if (c.serp) why.push(`SERP: ${c.serp.summary}${c.serp.uncertain ? ' (usikkert)' : ''}`)
+    if (c.serp && c.serpState === 'ok') why.push(`SERP: ${c.serp.summary}${c.serp.uncertain ? ' (usikkert)' : ''}`)
+    else if (c.serpState !== 'ikke-analyseret') why.push(STATE_LABEL[c.serpState] + (c.serpState === 'tom' && (c.volume ?? 0) > 0 ? ` (Ahrefs viser dog volumen ${c.volume})` : ''))
     why.push(c.roleReason)
     c.rationale = why.join('. ')
     c.suggested = c.role === 'primaer' || c.role === 'sekundaer' ? 'kandidat' : c.role === 'fravaelg' || c.role === 'anden-side' ? 'fravalgt' : 'afventer'
@@ -455,7 +484,7 @@ function computeFocus(
 
   const approved = candidates.filter(c => c.status === 'godkendt')
   if (approved.length > 0) {
-    return { conclusion: 'godkendt', headline: `Godkendt SEO-fokus: ${approved.map(c => `«${c.keyword}»`).join(', ')}`, reason: 'Du har godkendt søgeordet som SEO-mål. Søgeordsrelaterede kontroller er aktive.', candidates }
+    return { conclusion: 'godkendt', headline: `Godkendt SEO-fokus: ${approved.map(c => `«${c.keyword}»`).join(', ')}`, reason: 'Du har godkendt søgeordet som SEO-mål. Søgeordsrelaterede kontroller er aktive.', candidates, comparable: true, uncompared: [] }
   }
   if (best) {
     const sec = candidates.filter(c => c.role === 'sekundaer').map(c => `«${c.keyword}»`)
@@ -465,18 +494,19 @@ function computeFocus(
     if (sec.length) parts.push(`Sekundære: ${sec.join(', ')}.`)
     if (other.length) parts.push(`Bedre til en anden side: ${other.join(', ')}.`)
     if (drop.length) parts.push(`Anbefales fravalgt: ${drop.join(', ')}.`)
+    if (!comparable) parts.push(`Kan endnu ikke sammenlignes: ${uncompared.map(c => `«${c.keyword}» (${STATE_LABEL[c.serpState]})`).join(', ')}.`)
     parts.push('Intet er godkendt – status ændres kun af dig.')
-    return { conclusion: 'primaer', headline: `Anbefalet primær kandidat: «${best.keyword}» (${best.b2b.overall})`, reason: parts.join(' '), candidates }
+    return { conclusion: 'primaer', headline: comparable ? `Anbefalet primær kandidat: «${best.keyword}» (${best.b2b.overall})` : `Foreløbig primær kandidat: «${best.keyword}» (${best.b2b.overall}) – ikke verificeret mod øvrige kandidater`, reason: parts.join(' '), candidates, comparable, uncompared: uncompared.map(c => c.keyword) }
   }
   if (data.length === 0 && Object.keys(analyses).length === 0) {
-    return { conclusion: 'afventer', headline: 'Afventer søgedata', reason: 'Upload en Ahrefs keyword-oversigt og/eller analysér SERP, før der foreslås et primært søgeord. Intet søgeord er valgt.', candidates }
+    return { conclusion: 'afventer', headline: 'Afventer søgedata', reason: 'Upload en Ahrefs keyword-oversigt og/eller analysér SERP, før der foreslås et primært søgeord. Intet søgeord er valgt.', candidates, comparable: false, uncompared: [] }
   }
   const phrase = input.h1 || input.pageTitle
   const withVol = candidates.filter(c => (c.volume ?? 0) > 0 && c.role !== 'fravaelg')
   if (withVol.length === 0 || candidates.some(c => c.role === 'sekundaer')) {
-    return { conclusion: 'sidefokus', headline: `Anbefalet sidefokus: «${phrase}»`, reason: 'Ingen kandidat kan anbefales som primært SEO-søgeord ud fra B2B- og SERP-vurderingen. Sidens formulering kan stadig beskrive formålet. Manglende volumen i Ahrefs betyder ikke, at ingen søger.', candidates }
+    return { conclusion: 'sidefokus', headline: `Anbefalet sidefokus: «${phrase}»`, reason: 'Ingen kandidat kan anbefales som primært SEO-søgeord ud fra B2B- og SERP-vurderingen. Sidens formulering kan stadig beskrive formålet. Manglende volumen i Ahrefs betyder ikke, at ingen søger.', candidates, comparable: false, uncompared: [] }
   }
-  return { conclusion: 'afventer', headline: 'Kandidater afventer SERP-verifikation', reason: `${withVol.map(c => `«${c.keyword}» (${c.volume})`).join(', ')} har volumen, men er ikke SERP-verificeret. Høj volumen alene vælger ikke et primært søgeord – klik "Analysér SERP".`, candidates }
+  return { conclusion: 'afventer', headline: 'Kandidater afventer SERP-verifikation', reason: `${withVol.map(c => `«${c.keyword}» (${c.volume})`).join(', ')} har volumen, men er ikke SERP-verificeret. Høj volumen alene vælger ikke et primært søgeord – klik "Analysér SERP".`, candidates, comparable: false, uncompared: [] }
 }
 
 // ── Hjælpere til anbefalinger ────────────────────────────────────────────────────────────────
