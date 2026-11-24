@@ -28,6 +28,7 @@ export interface SeoInput {
   serp?: Record<string, SerpData>
   analysisMode?: 'ny' | 'eksisterende'
   b2bOverride?: Record<string, 'match' | 'delvist' | 'ikke'>
+  structuredDataVerified?: boolean
   sortimentConfirmed?: Record<string, boolean>
   serpIssues?: Record<string, 'fejl' | 'utilgaengelig'>
   kwData?: { keyword: string; volume: number; difficulty: number | null; intents: string }[]
@@ -152,6 +153,7 @@ export interface SeoResult {
   verdict: string[]
   scoreBreakdown: ScoreRow[]
   scoreFormula: string
+  scoreScope: { included: string[]; excluded: { label: string; reason: string }[] }
   relevanceFormula: string
   coverage: { items: CoverageItem[]; done: number; total: number }
   serpAnalyses: Record<string, SerpAnalysis>
@@ -514,7 +516,7 @@ function rec(
   id: string, label: string, verdict: Verdict, status: RecommendationItem['status'], statusLabel: string,
   observation: string, evidence: string, meaning: string, action: string,
 ): RecommendationItem {
-  const detail = `<b>Observation:</b> ${observation}\n<b>Dokumentation:</b> ${evidence}\n<b>Betydning:</b> ${meaning}\n<b>Handling:</b> ${action}`
+  const detail = `<b>Dokumenteret observation:</b> ${observation}\n<b>Kilde/dokumentation:</b> ${evidence}\n<b>Faglig vurdering:</b> ${meaning}\n<b>Anbefalet handling:</b> ${action}`
   return { id, verdict, label, status, statusLabel, detail, observation, evidence, meaning, action }
 }
 
@@ -643,9 +645,9 @@ export function analyzeSeo(input: SeoInput): SeoResult {
 
   // Links
   if (internalLinks >= 1) {
-    recs.push(rec('links', 'Internal Links', 'behold', 'ok', 'Behold', `${internalLinks} link(s) i indholdet.`, 'Talt i det scrapede indhold.', 'Antal links dokumenterer ikke relevans; ét relevant link er bedre end mange irrelevante.', 'Ingen handling udløst.'))
+    recs.push(rec('links', 'Internal Links', 'ikke-verificeret', 'neutral', 'Ikke verificeret', `${internalLinks} link(s) fundet i indholdet.`, 'Antal talt i det scrapede indhold. Destinationerne er ikke undersøgt.', 'Antallet dokumenterer ikke relevans – ét relevant link kan være bedre end mange irrelevante. Relevansen er en faglig vurdering, der kræver, at destinationerne gennemgås.', 'Gennemgå selv, om linkene fører til relevante sider. Ingen handling udløst af antallet.'))
   } else {
-    recs.push(rec('links', 'Internal Links', 'manuel', 'warn', 'Manuel vurdering', 'Ingen links i indholdet.', 'Talt i det scrapede indhold.', 'Interne links kan hjælpe brugeren videre, men kun hvis der findes relevante sider.', 'Vurdér selv, om der er relevante sider at linke til.'))
+    recs.push(rec('links', 'Internal Links', 'manuel', 'warn', 'Manuel vurdering', 'Ingen links fundet i indholdet.', 'Talt i det scrapede indhold.', 'Interne links kan hjælpe brugeren videre, men kun hvis der findes relevante sider. Om der findes sådanne, er en faglig vurdering.', 'Vurdér selv, om der er relevante sider at linke til.'))
   }
 
   // Meta
@@ -666,9 +668,12 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   recs.push(rec('faq', 'FAQ Section', 'behold', 'ok', 'Behold', hasFaq ? 'FAQ-sektion fundet.' : 'Ingen FAQ-sektion.', 'Søgt i det scrapede indhold.', 'FAQ er nyttigt for brugerne, hvis kunderne reelt stiller spørgsmålene. Google har udfaset FAQ rich results, så FAQPage JSON-LD er ikke længere et SEO-tiltag.', 'Ingen handling.'))
 
   // Structured data
-  recs.push(sdActive
-    ? rec('structured-data', 'Structured Data', 'behold', 'ok', `Aktiv: ${sdTypes.join(', ')}`, `Du har markeret: ${sdTypes.join(', ')}.`, 'Markeret manuelt af dig – værktøjet læser ikke sidens markup.', 'Markup kan give rige visninger, hvis det er gyldigt.', 'Verificér i Rich Results Test: https://search.google.com/test/rich-results')
-    : rec('structured-data', 'Structured Data', 'ikke-verificeret', 'neutral', 'Ikke verificeret', 'Sidens markup er ikke undersøgt.', 'Værktøjet læser ikke sidens markup.', 'Der kan hverken konkluderes fejl eller mangler.', 'Tjek i Rich Results Test og markér de typer, siden har.'))
+  const sdVerified = sdActive && !!input.structuredDataVerified
+  recs.push(sdVerified
+    ? rec('structured-data', 'Structured Data', 'behold', 'ok', `Verificeret: ${sdTypes.join(', ')}`, `Du har oplyst ${sdTypes.join(', ')} og bekræftet, at markup er verificeret i Rich Results Test.`, 'Oplyst og bekræftet af dig – værktøjet læser ikke selv sidens markup.', 'Verificeret markup kan give rige visninger.', 'Ingen handling.')
+    : sdActive
+      ? rec('structured-data', 'Structured Data', 'ikke-verificeret', 'neutral', `Manuelt oplyst: ${sdTypes.join(', ')}`, `Du har manuelt oplyst: ${sdTypes.join(', ')}. Markup er ikke verificeret.`, 'Oplyst manuelt af dig – værktøjet læser ikke sidens markup, og oplysningen giver ingen point.', 'Manuelt oplyst markup kan være ugyldigt eller mangle på siden.', 'Verificér i Rich Results Test (https://search.google.com/test/rich-results), og bekræft i formularen.')
+      : rec('structured-data', 'Structured Data', 'ikke-verificeret', 'neutral', 'Ikke verificeret', 'Sidens markup er ikke undersøgt.', 'Værktøjet læser ikke sidens markup.', 'Der kan hverken konkluderes fejl eller mangler.', 'Tjek i Rich Results Test og markér de typer, siden har.'))
 
   // Søgeordsfokus
   if (kwActive) {
@@ -688,7 +693,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   // Status følger altid verdict (undtagen "error" ved manglende element, og structured data-label)
   for (const r of recs) {
     if (r.status !== 'error') r.status = VERDICT_STATUS[r.verdict]
-    if (r.status !== 'error' && !r.statusLabel.startsWith('Aktiv')) r.statusLabel = VERDICT_LABEL[r.verdict]
+    if (r.status !== 'error' && !/^(Aktiv|Manuelt oplyst|Verificeret)/.test(r.statusLabel)) r.statusLabel = VERDICT_LABEL[r.verdict]
   }
 
   // ══ SCORE (tre adskilte dele) ════════════════════════════════════════════════
@@ -708,7 +713,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     { group: 'on-page', label: 'Interne links til stede', earned: internalLinks >= 1 ? 10 : 0, max: 10, note: `${internalLinks} fundet (grundkontrol)` },
     { group: 'on-page', label: 'Title passer til sidens indhold', earned: consPts, max: 10, note: titleCons.total ? `${titleCons.hit}/${titleCons.total} ord genfundet` : 'Intet at sammenligne' },
     { group: 'on-page', label: 'Meta passer til sidens indhold', earned: metaConsPts, max: 5, note: metaCons.total ? `${metaCons.hit}/${metaCons.total} ord genfundet` : 'Intet at sammenligne' },
-    { group: 'on-page', label: 'Struktureret data (bonus)', earned: sdActive ? 5 : 0, max: 5, bonus: true, note: sdActive ? 'Markeret af dig' : 'Ikke verificeret – tæller hverken for eller imod' },
+    { group: 'on-page', label: 'Struktureret data (bonus, kun verificeret)', earned: sdVerified ? 5 : 0, max: 5, bonus: true, note: sdVerified ? 'Verificeret og bekræftet af dig' : sdActive ? 'Manuelt oplyst, ikke verificeret – giver ingen point' : 'Ikke undersøgt – tæller hverken for eller imod' },
   ]
   // 2) SEO-relevans: kun for GODKENDTE søgeord. Ellers udeladt (påvirker aldrig on-page-scoren).
   const exNote = `Udeladt – «${input.targetKeyword}» er ikke godkendt`
@@ -725,11 +730,12 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   const onPageRows = breakdown.filter(r => r.group === 'on-page')
   const onPageRaw = sum(onPageRows)
   const onPageDenom = onPageRows.filter(r => !r.bonus).reduce((a, r) => a + r.max, 0)
-  const percentage = Math.min(Math.max(Math.round((onPageRaw / onPageDenom) * 100), 0), 100)
+  const onPageCapped = Math.min(onPageRaw, onPageDenom) // aldrig over 100 mulige point
+  const percentage = Math.min(Math.max(Math.round((onPageCapped / onPageDenom) * 100), 0), 100)
   const relRows = breakdown.filter(r => r.group === 'relevans' && !r.excluded)
   const relDenom = relRows.reduce((a, r) => a + r.max, 0)
   const relevanceScore = kwActive && relDenom > 0 ? Math.round((sum(relRows) / relDenom) * 100) : null
-  const scoreFormula = `On-page-kontrol: ${onPageRaw} point af ${onPageDenom} mulige = ${percentage} % (kun automatiske, målbare kontroller)`
+  const scoreFormula = `On-page-kontrol: ${onPageCapped} point af ${onPageDenom} mulige = ${percentage} % (kun automatiske, målbare kontroller)`
   const relevanceFormula = relevanceScore === null ? 'SEO-relevans: ikke beregnet – ingen godkendt søgeord' : `SEO-relevans: ${sum(relRows)} point af ${relDenom} mulige = ${relevanceScore} % (kun for godkendte søgeord)`
 
   // 3) Potentiale (GSC)
@@ -767,7 +773,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     { label: 'SERP verificeret', done: approvedSerp || (!!targetSerp && targetSerp.organicCount >= 5), note: targetSerp ? `${targetSerp.organicCount} resultater (${targetSerp.dataDate ? targetSerp.dataDate.slice(0, 10) : 'dato ukendt'})` : 'Ikke analyseret' },
     ...(isNew ? [] : [{ label: 'GSC-data tilstrækkelige og tilknyttet URL/periode', done: gscVerified, note: gsc.length === 0 ? 'Ikke indlæst' : gscVerified ? 'Tilstrækkelige' : 'Utilstrækkelige eller URL/periode mangler' }]),
     { label: 'B2B-vurdering SERP-understøttet', done: focus.candidates.some(c => c.b2b.basis === 'serp' && c.b2b.overall !== 'IKKE VURDERET'), note: focus.candidates.some(c => c.b2b.basis !== 'estimat') ? 'Mindst ét søgeord' : 'Kun foreløbige estimater' },
-    { label: 'Structured data undersøgt', done: sdActive, note: sdActive ? 'Markeret af dig' : 'Ikke undersøgt' },
+    { label: 'Structured data verificeret', done: sdVerified, note: sdVerified ? 'Verificeret og bekræftet af dig' : sdActive ? 'Kun manuelt oplyst' : 'Ikke undersøgt' },
   ]
   const coverageDone = coverageItems.filter(c => c.done).length
 
@@ -800,7 +806,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
       ? { num: 'Gap 01 · Manglende dækning', tag: '#ff7043', title: `${gsc.length} forespørgsler registreret`, description: 'Utilstrækkelige data til anbefalinger.', color: '#ff7043' }
       : { num: 'Gap 01 · Manglende dækning', tag: '#ff7043', title: (missingKeywords.length + gscMissing.length) > 0 ? `${missingKeywords.length} keywords + ${gscMissing.length} GSC-søgninger ikke fundet` : 'Semantisk dækning', description: (missingKeywords.length + gscMissing.length) > 0 ? `Ikke fundet: ${[...missingKeywords, ...gscMissing].slice(0, 5).join(', ')}. At noget ikke står på siden er ikke i sig selv et problem – vurdér relevans først.` : 'Alle valgte keywords og GSC-søgninger er dækket.', color: '#ff7043' },
     { num: 'Gap 02 · Intention', tag: '#4f7fff', title: targetSerp ? `SERP: ${serpSummary(targetSerp)}` : 'SERP ikke analyseret', description: targetSerp ? targetSerp.reasons.join(' ') : 'Klik "Analysér SERP" under Keywords for at se, hvilke sidetyper der rangerer – eller tjek top 10 manuelt.', color: '#4f7fff' },
-    { num: 'Gap 03 · Strukturerede data', tag: '#2dce89', title: sdActive ? 'Structured data markeret' : 'Structured data ikke undersøgt', description: sdActive ? 'Verificér i Rich Results Test, at markup er til stede og gyldigt.' : 'Værktøjet kan ikke se sidens markup. Tjek i Rich Results Test, før du konkluderer, at noget mangler.', color: '#2dce89' },
+    { num: 'Gap 03 · Strukturerede data', tag: '#2dce89', title: sdVerified ? 'Structured data verificeret' : sdActive ? 'Structured data manuelt oplyst' : 'Structured data ikke undersøgt', description: sdActive ? (sdVerified ? 'Bekræftet af dig som verificeret i Rich Results Test.' : 'Manuelt oplyst, ikke verificeret. Verificér i Rich Results Test, og bekræft i formularen.') : 'Værktøjet kan ikke se sidens markup. Tjek i Rich Results Test, før du konkluderer, at noget mangler.', color: '#2dce89' },
   ]
 
   // ── Quick wins: kun dokumenterede OPTIMÉR-fund (maks. 3) + behold-besked ─────────
@@ -823,7 +829,7 @@ export function analyzeSeo(input: SeoInput): SeoResult {
   }
 
   return {
-    score: onPageRaw,
+    score: onPageCapped,
     maxScore: 100,
     percentage,
     keywords: keywordResults,
@@ -847,6 +853,14 @@ export function analyzeSeo(input: SeoInput): SeoResult {
     verdict,
     scoreBreakdown: breakdown,
     scoreFormula,
+    scoreScope: {
+      included: breakdown.filter(r => r.group === 'on-page' && !r.bonus).map(r => `${r.label} (maks. ${r.max})`),
+      excluded: [
+        ...(sdVerified ? [] : [{ label: 'Struktureret data (bonus, +5)', reason: sdActive ? 'Kun manuelt oplyst – bonus kræver, at du bekræfter verificering' : 'Ikke undersøgt' }]),
+        { label: 'Søgeordsrelevans', reason: kwActive ? 'Beregnes separat som SEO-relevans' : 'Intet godkendt søgeord' },
+        { label: 'SERP-, B2B- og GSC-vurderinger', reason: 'Indgår ikke i on-page-scoren – de påvirker kun anbefalinger og søgeordsstatus' },
+      ],
+    },
     relevanceFormula,
     coverage: { items: coverageItems, done: coverageDone, total: coverageItems.length },
     serpAnalyses,

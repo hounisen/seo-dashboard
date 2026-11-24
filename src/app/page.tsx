@@ -19,6 +19,7 @@ interface FormState {
   intentFit: '' | 'match' | 'partial' | 'mismatch'
   businessContext: string
   analysisMode: 'ny' | 'eksisterende'
+  structuredDataVerified: boolean
   pageType: PageTypeInput
   gscUrl: string
   gscPeriod: string
@@ -88,6 +89,7 @@ const DEFAULT_FORM: FormState = {
   intentFit: '',
   businessContext: '',
   analysisMode: 'eksisterende',
+  structuredDataVerified: false,
   pageType: '',
   gscUrl: '',
   gscPeriod: '',
@@ -453,7 +455,13 @@ function AhrefsPreview({ data }: { data: AhrefsRow[] }) {
 }
 
 // ── Tekstforslag (Claude API, kun efter manuel anmodning) ─────────────────────
-interface Suggestion { element: string; current: string; proposed: string; reason: string; evidence: string; source: string; placement: string }
+interface Suggestion { element: string; current: string; proposed: string; reason: string; observation?: string; judgement?: string; evidence: string; source: string; placement: string }
+interface SuggItem extends Suggestion { state: 'ny' | 'anvendt' | 'afvist'; draft: string }
+interface SuggSet { url: string; items: SuggItem[]; behold: { behold: boolean; reason: string } | null; meta: string }
+
+const SUGG_STORE_KEY = 'seoSuggestions'
+// Forslag knyttes til den analyserede URL, så forslag fra forskellige sider ikke blandes
+const suggKey = (u: string) => (u || '').trim().toLowerCase().replace(/^https?:\/\/(www\.)?/, '').replace(/[?#].*$/, '').replace(/\/+$/, '') || '(ingen-url)'
 
 function DiffText({ current, proposed }: { current: string; proposed: string }) {
   const cur = new Set(current.toLowerCase().split(/\s+/).filter(Boolean))
@@ -464,22 +472,31 @@ function DiffText({ current, proposed }: { current: string; proposed: string }) 
   )
 }
 
-function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped }: {
+function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped, stored, onStore, onClear }: {
   form: FormState
   setForm: React.Dispatch<React.SetStateAction<FormState>>
   result: SeoResult
   kwStatus: Record<string, 'kandidat' | 'godkendt' | 'fravalgt'>
   serpMap: Record<string, SerpData>
   scraped: { pageTitle: string; metaDescription: string; h1: string; bodyContent: string }
+  stored: SuggSet | undefined
+  onStore: (key: string, set: SuggSet) => void
+  onClear: (key: string) => void
 }) {
+  // Forslagene ligger i forælderen (og i localStorage), så de overlever faneskift – kun indlæsningstilstand er lokal
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [items, setItems] = useState<(Suggestion & { state: 'ny' | 'anvendt' | 'afvist'; draft: string })[]>([])
-  const [behold, setBehold] = useState<{ behold: boolean; reason: string } | null>(null)
-  const [meta, setMeta] = useState('')
+  const key = suggKey(form.url)
+  const items = stored?.items ?? []
+  const behold = stored?.behold ?? null
+  const meta = stored?.meta ?? ''
   const approved = kwStatus[normKw(form.targetKeyword)] === 'godkendt'
+  const save = (next: SuggItem[]) => onStore(key, { url: form.url, items: next, behold, meta })
 
   const generate = async () => {
+    const hasWork = items.some(i => i.state !== 'ny' || i.draft !== i.proposed)
+    if (hasWork && !confirm('Du har forslag med redigeringer, anvendte eller afviste forslag. "Generér nye forslag" erstatter dem alle. Fortsæt?')) return
+    const reqKey = key, reqUrl = form.url
     setLoading(true); setError('')
     try {
       const payload = {
@@ -498,9 +515,12 @@ function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped }: {
       const res = await fetch('/api/suggest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       const d = await res.json()
       if (!res.ok || d.error) { setError(d.error || 'Kunne ikke generere forslag.'); return }
-      setBehold({ behold: !!d.behold, reason: d.beholdReason || '' })
-      setItems((d.suggestions || []).slice(0, 3).map((s: Suggestion) => ({ ...s, state: 'ny' as const, draft: s.proposed })))
-      setMeta(`${d.model || ''} · ${d.generatedAt ? new Date(d.generatedAt).toLocaleString('da-DK') : ''}`)
+      onStore(reqKey, {
+        url: reqUrl,
+        behold: { behold: !!d.behold, reason: d.beholdReason || '' },
+        items: (d.suggestions || []).slice(0, 3).map((s: Suggestion) => ({ ...s, state: 'ny' as const, draft: s.proposed })),
+        meta: `${d.model || ''} · ${d.generatedAt ? new Date(d.generatedAt).toLocaleString('da-DK') : ''}`,
+      })
     } catch { setError('Kunne ikke nå serveren. Resten af analysen er upåvirket.') }
     finally { setLoading(false) }
   }
@@ -523,15 +543,19 @@ function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped }: {
       body = body.trimEnd() + '\n\n' + text
       return { ...prev, bodyContent: body }
     })
-    setItems(prev => prev.map((x, i) => (i === idx ? { ...x, state: 'anvendt' } : x)))
+    save(items.map((x, i) => (i === idx ? { ...x, state: 'anvendt' as const } : x)))
   }
 
   return (
-    <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+    <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100" data-testid="suggest-panel">
       <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-1">Tekstforslag</p>
-      <p className="text-xs text-gray-500 mb-3">Forslagene genereres kun, når du beder om det (Claude API). Intet overskrives eller publiceres automatisk – anvendte forslag lægges i &quot;Rediger live&quot;-kladden, og den originale side er uændret. Maks. tre prioriterede forslag.</p>
+      <p className="text-xs text-gray-500 mb-3">Forslagene genereres kun, når du beder om det (Claude API), og gemmes pr. URL i denne browser, så de overlever faneskift og genindlæsning. Intet overskrives eller publiceres automatisk – anvendte forslag lægges i &quot;Rediger live&quot;-kladden, og den originale side er uændret. Maks. tre prioriterede forslag.</p>
       {!approved && <p className="text-xs bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 text-amber-700 mb-3">«{form.targetKeyword}» er ikke godkendt som SEO-søgeord. Forslag markeres derfor som foreløbige.</p>}
-      <button onClick={generate} disabled={loading || !form.pageTitle} className="px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-semibold disabled:bg-gray-300">{loading ? 'Genererer…' : items.length ? 'Generér nye forslag' : 'Generér forslag'}</button>
+      <div className="flex flex-wrap items-center gap-3">
+        <button onClick={generate} disabled={loading || !form.pageTitle} className="px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-semibold disabled:bg-gray-300">{loading ? 'Genererer…' : items.length || behold ? 'Generér nye forslag' : 'Generér forslag'}</button>
+        {(items.length > 0 || behold) && <button onClick={() => { if (confirm('Slet de gemte forslag for denne URL?')) onClear(key) }} className="text-xs text-gray-400 hover:text-red-500">Slet gemte forslag</button>}
+      </div>
+      {stored && <p className="text-xs text-gray-400 mt-2">Gemte forslag for: {stored.url || '(ingen URL angivet)'}</p>}
       {error && <p className="text-xs text-red-500 mt-3">{error}</p>}
       {behold && (
         <div className="mt-4 text-xs bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2 text-emerald-800">
@@ -540,32 +564,33 @@ function SuggestPanel({ form, setForm, result, kwStatus, serpMap, scraped }: {
       )}
       <div className="mt-4 space-y-4">
         {items.map((it, idx) => (
-          <div key={idx} className={`border rounded-xl p-4 ${it.state === 'afvist' ? 'opacity-40' : ''} border-gray-200`}>
+          <div key={idx} data-testid="suggestion" className={`border rounded-xl p-4 ${it.state === 'afvist' ? 'opacity-40' : ''} border-gray-200`}>
             <div className="flex flex-wrap items-center gap-2 mb-2">
               <span className="text-xs font-bold uppercase tracking-wide text-gray-700">{it.element}</span>
               <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${it.evidence === 'dokumenteret' ? 'bg-emerald-100 text-emerald-700' : it.evidence === 'hypotese' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'}`}>{it.evidence}</span>
               {!approved && <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">FORELØBIGT</span>}
-              {it.state === 'anvendt' && <span className="text-xs font-bold text-emerald-600">✓ Lagt i kladden</span>}
+              <span data-testid="suggestion-status" className={`text-xs font-bold ${it.state === 'anvendt' ? 'text-emerald-600' : it.state === 'afvist' ? 'text-red-500' : 'text-gray-400'}`}>{it.state === 'anvendt' ? '✓ ANVENDT' : it.state === 'afvist' ? 'AFVIST' : 'AFVENTER'}</span>
             </div>
             <div className="grid sm:grid-cols-2 gap-3 text-sm">
               <div><div className="text-xs text-gray-400 mb-1">Nu</div><div className="text-gray-600 whitespace-pre-wrap">{it.current || '(nyt)'}</div></div>
-              <div><div className="text-xs text-gray-400 mb-1">Forslag</div><div className="text-gray-800 whitespace-pre-wrap"><DiffText current={it.current} proposed={it.draft} /></div></div>
+              <div><div className="text-xs text-gray-400 mb-1">Forslag</div><div data-testid="suggestion-text" className="text-gray-800 whitespace-pre-wrap"><DiffText current={it.current} proposed={it.draft} /></div></div>
             </div>
             {it.placement && <p className="text-xs text-gray-500 mt-2">Placering: {it.placement}</p>}
-            <p className="text-xs text-gray-600 mt-2">{it.reason}</p>
+            {it.observation && <p className="text-xs text-gray-600 mt-2"><b>Dokumenteret observation:</b> {it.observation}</p>}
+            <p className="text-xs text-gray-600 mt-1"><b>Faglig vurdering:</b> {it.judgement || it.reason}</p>
             <p className="text-xs text-gray-400">Grundlag: {it.source}</p>
             {it.state === 'ny' && (
               <details className="mt-2"><summary className="text-xs text-blue-600 cursor-pointer">Redigér forslag</summary>
-                <textarea value={it.draft} onChange={e => setItems(prev => prev.map((x, i) => (i === idx ? { ...x, draft: e.target.value } : x)))} rows={3} className="w-full mt-1 px-3 py-2 rounded-lg border border-gray-200 text-xs" />
+                <textarea data-testid="suggestion-edit" value={it.draft} onChange={e => save(items.map((x, i) => (i === idx ? { ...x, draft: e.target.value } : x)))} rows={3} className="w-full mt-1 px-3 py-2 rounded-lg border border-gray-200 text-xs" />
               </details>
             )}
             {it.state === 'ny' && (
               <div className="flex gap-3 mt-3 text-xs font-semibold">
                 <button onClick={() => apply(idx)} className="text-emerald-600 hover:underline">Anvend i kladde</button>
-                <button onClick={() => setItems(prev => prev.map((x, i) => (i === idx ? { ...x, state: 'afvist' } : x)))} className="text-red-500 hover:underline">Afvis</button>
+                <button onClick={() => save(items.map((x, i) => (i === idx ? { ...x, state: 'afvist' as const } : x)))} className="text-red-500 hover:underline">Afvis</button>
               </div>
             )}
-            {it.state === 'anvendt' && <p className="text-xs text-gray-400 mt-2">Original (scrapet): {it.element === 'title' ? scraped.pageTitle : it.element === 'meta' ? scraped.metaDescription : it.element === 'h1' ? scraped.h1 : 'uændret i den scrapede side'}</p>}
+            {it.state === 'anvendt' && <p className="text-xs text-gray-400 mt-2">Original (scrapet): {it.element === 'title' ? scraped.pageTitle : it.element === 'meta' ? scraped.metaDescription : it.element === 'h1' ? scraped.h1 : 'uændret i den scrapede side'}. Kladden i &quot;Rediger live&quot; gemmes ikke ved genindlæsning.</p>}
           </div>
         ))}
       </div>
@@ -699,7 +724,23 @@ export default function SeoDashboard() {
   const [serpMap, setSerpMap] = useState<Record<string, SerpData>>({})
   const [sortimentOk, setSortimentOk] = useState<Record<string, boolean>>({})
   const [serpIssue, setSerpIssue] = useState<Record<string, 'fejl' | 'utilgaengelig'>>({})
+  const [suggStore, setSuggStore] = useState<Record<string, SuggSet>>({})
   const [serpLoading, setSerpLoading] = useState('')
+
+  // Forslag gemmes i state (overlever faneskift) og i localStorage (overlever genindlæsning)
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SUGG_STORE_KEY)
+      if (raw) setSuggStore(JSON.parse(raw) as Record<string, SuggSet>)
+    } catch { /* ingen gemte forslag */ }
+  }, [])
+  const persistSugg = (next: Record<string, SuggSet>) => { try { localStorage.setItem(SUGG_STORE_KEY, JSON.stringify(next)) } catch { /* ignorer */ } }
+  const storeSugg = useCallback((key: string, set: SuggSet) => {
+    setSuggStore(prev => { const next = { ...prev, [key]: set }; persistSugg(next); return next })
+  }, [])
+  const clearSugg = useCallback((key: string) => {
+    setSuggStore(prev => { const next = { ...prev }; delete next[key]; persistSugg(next); return next })
+  }, [])
   const [serpError, setSerpError] = useState<Record<string, string>>({})
 
   // Hent cachede SERP-målinger (maks. 24 timer gamle) fra browseren
@@ -758,6 +799,7 @@ export default function SeoDashboard() {
       h1: form.h1,
       bodyContent: form.bodyContent,
       structuredDataTypes: form.structuredDataTypes,
+      structuredDataVerified: form.structuredDataVerified,
       gsc: gscData,
       intentFit: form.intentFit,
       businessContext: form.businessContext,
@@ -777,11 +819,12 @@ export default function SeoDashboard() {
       pageTitle: scraped.pageTitle, metaDescription: scraped.metaDescription,
       h1: scraped.h1, bodyContent: scraped.bodyContent,
       structuredDataTypes: form.structuredDataTypes,
+      structuredDataVerified: form.structuredDataVerified,
       gsc: gscData, intentFit: form.intentFit, businessContext: form.businessContext, keywordStatus: kwStatus, b2bOverride, sortimentConfirmed: sortimentOk, serpIssues: serpIssue, analysisMode: form.analysisMode, pageType: form.pageType, gscMeta: { url: form.gscUrl, period: form.gscPeriod }, serp: serpMap,
       kwData: kwOverview.map(k => ({ keyword: k.keyword, volume: k.volume, difficulty: k.difficulty, intents: k.intents })),
     }))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.targetKeyword, form.semanticKeywords, scraped, form.structuredDataTypes, gscData, form.intentFit, form.businessContext, kwOverview, kwStatus, serpMap, b2bOverride, sortimentOk, serpIssue, form.analysisMode, form.pageType, form.gscUrl, form.gscPeriod])
+  }, [form.targetKeyword, form.semanticKeywords, scraped, form.structuredDataTypes, form.structuredDataVerified, gscData, form.intentFit, form.businessContext, kwOverview, kwStatus, serpMap, b2bOverride, sortimentOk, serpIssue, form.analysisMode, form.pageType, form.gscUrl, form.gscPeriod])
 
   const updateForm = useCallback((key: keyof FormState, val: string) => {
     setForm(prev => ({ ...prev, [key]: val }))
@@ -1128,6 +1171,7 @@ export default function SeoDashboard() {
                         intentFit: '',
                         businessContext: '',
                         analysisMode: 'eksisterende',
+                        structuredDataVerified: false,
                         pageType: '',
                         gscUrl: '',
                         gscPeriod: '',
@@ -1377,7 +1421,13 @@ export default function SeoDashboard() {
                     })}
                   </div>
                   {form.structuredDataTypes.length > 0 && (
-                    <p className="text-xs text-emerald-600 mt-2 font-medium">✓ {form.structuredDataTypes.join(', ')} – tæller med i scoren</p>
+                    <div className="mt-2">
+                      <p className="text-xs text-amber-700 font-medium">Manuelt oplyst: {form.structuredDataTypes.join(', ')} – giver ingen point, før du har verificeret markup.</p>
+                      <label className="flex items-center gap-2 text-xs text-gray-600 mt-1 cursor-pointer">
+                        <input type="checkbox" checked={form.structuredDataVerified} onChange={e => setForm(prev => ({ ...prev, structuredDataVerified: e.target.checked }))} />
+                        Jeg har verificeret markup i Rich Results Test (værktøjet læser ikke selv sidens markup)
+                      </label>
+                    </div>
                   )}
                   <p className="text-xs text-gray-400 mt-1.5">
                     Tjek via <a href="https://search.google.com/test/rich-results" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">Google Rich Results Test</a>
@@ -1712,7 +1762,7 @@ export default function SeoDashboard() {
 
                 </>)}
                 {dashTab === 'forslag' && (<>
-                <SuggestPanel form={form} setForm={setForm} result={result} kwStatus={kwStatus} serpMap={serpMap} scraped={scraped} />
+                <SuggestPanel form={form} setForm={setForm} result={result} kwStatus={kwStatus} serpMap={serpMap} scraped={scraped} stored={suggStore[suggKey(form.url)]} onStore={storeSugg} onClear={clearSugg} />
                 </>)}
                 {dashTab === 'editor' && (<>
                 {/* Live Editor */}
@@ -1737,7 +1787,7 @@ export default function SeoDashboard() {
                               <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${rec.verdict === 'behold' ? 'bg-emerald-100 text-emerald-700' : rec.verdict === 'optimer' ? 'bg-blue-100 text-blue-700' : rec.verdict === 'ikke-verificeret' ? 'bg-gray-100 text-gray-600' : 'bg-amber-100 text-amber-700'}`}>
                                 {rec.verdict === 'behold' ? 'BEHOLD' : rec.verdict === 'optimer' ? 'OPTIMÉR' : rec.verdict === 'ikke-verificeret' ? 'IKKE VERIFICERET' : 'MANUEL VURDERING'}
                               </span>
-                              {rec.statusLabel.startsWith('Aktiv') && <span className="text-xs text-gray-500">{rec.statusLabel}</span>}
+                              {/^(Aktiv|Manuelt oplyst|Verificeret)/.test(rec.statusLabel) && <span className="text-xs text-gray-500">{rec.statusLabel}</span>}
                             </div>
                           </div>
                           <span className="text-gray-300 text-lg font-light ml-2 flex-shrink-0">›</span>
@@ -2154,6 +2204,10 @@ export default function SeoDashboard() {
                     </table>
                   </div>
                   <p className="text-xs text-gray-400 mt-3">Røde point er det, der trækker scoren ned. Ukendte forhold (fx structured data) tæller hverken for eller imod. Et element kan få BEHOLD, selvom det ikke giver fulde point.</p>
+                  <div className="mt-3 text-xs text-gray-600" data-testid="score-scope">
+                    <p><b>Indgår i on-page-scoren (maks. 100):</b> {result.scoreScope.included.join(' · ')}</p>
+                    <p className="mt-1"><b>Indgår ikke:</b> {result.scoreScope.excluded.map(e => `${e.label} (${e.reason})`).join(' · ')}</p>
+                  </div>
                 </div>
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
                   <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-1">Analysegrundlag</p>

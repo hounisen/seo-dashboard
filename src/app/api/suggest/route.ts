@@ -10,10 +10,11 @@ Regler:
 - Opfind ALDRIG produktegenskaber, certificeringer, priser, leveringsløfter eller sortiment, som ikke fremgår af den givne forretningskontekst eller sidens eksisterende tekst.
 - Input indeholder analysisMode ('ny' = SEO-planlægning, 'eksisterende' = optimering) og keywordAssessments med B2B-vurdering og rolle pr. søgeord. Brug kun søgeord med role 'primaer' eller 'sekundaer' i title/meta/H1/brødtekst. Søgeord med role 'fravaelg' eller 'anden-side' må IKKE indarbejdes på siden; nævn i stedet i beholdReason eller reason, at de bør målrettes en anden side. Basis 'estimat' er ikke verificeret: marker forslag som 'hypotese'. Ved analysisMode 'ny' må GSC ikke bruges som dokumentation for sidens performance.
 - Foreslå kun søgeord/emner, der matcher sidens formål, målgruppe og faktiske sortiment.
-- Hvert forslag skal have: element (title|meta|h1|h2|intro|body|link), current (eksisterende tekst, tom hvis nyt), proposed (færdigformuleret tekst), reason (kort, konkret), evidence (dokumenteret|hypotese|redaktionel), source (hvilke data understøtter det: fx "SERP", "GSC", "Ahrefs", "forretningskontekst", "sidens tekst"), placement (kun for h2/intro/body/link: præcis hvor, fx "efter overskriften 'X'" eller "som sidste afsnit").
-- "dokumenteret" kræver konkrete data i inputtet. Ellers brug "hypotese" eller "redaktionel".
+- Hvert forslag skal have: element (title|meta|h1|h2|intro|body|link), current (eksisterende tekst, tom hvis nyt), proposed (færdigformuleret tekst), observation (KUN målbare fakta fra inputtet, fx tegnantal eller at et ord mangler – tom hvis der ingen er), judgement (din faglige vurdering af, hvorfor ændringen hjælper – kort), evidence (dokumenteret|hypotese|redaktionel), source (hvilke data understøtter det: fx "SERP", "GSC", "Ahrefs", "forretningskontekst", "sidens tekst"), placement (kun for h2/intro/body/link: præcis hvor, fx "efter overskriften 'X'" eller "som sidste afsnit").
+- Skeln strengt mellem observation (dokumenteret i inputtet) og judgement (faglig vurdering). Antal interne links, ordantal eller tilstedeværelse af et element er IKKE dokumentation for kvalitet eller relevans. Linkforslag er altid "hypotese", da destinationerne ikke er undersøgt i inputtet.
+- "dokumenteret" kræver konkrete data i inputtet (observation udfyldt). Ellers brug "hypotese" eller "redaktionel".
 - title ≈ 30–65 tegn, meta ≈ 120–160 tegn. Skriv naturligt dansk til B2B-målgruppen, ingen overdrivelser.
-Format: {"behold":boolean,"beholdReason":string,"suggestions":[{"element":...,"current":...,"proposed":...,"reason":...,"evidence":...,"source":...,"placement":...}]}`
+Format: {"behold":boolean,"beholdReason":string,"suggestions":[{"element":...,"current":...,"proposed":...,"observation":...,"judgement":...,"evidence":...,"source":...,"placement":...}]}`
 
 export async function POST(req: NextRequest) {
   const apiKey = process.env.ANTHROPIC_API_KEY
@@ -43,8 +44,11 @@ export async function POST(req: NextRequest) {
         element: s.element,
         current: typeof s.current === 'string' ? s.current : '',
         proposed: s.proposed,
-        reason: typeof s.reason === 'string' ? s.reason : '',
-        evidence: ['dokumenteret', 'hypotese', 'redaktionel'].includes(s.evidence) ? s.evidence : 'redaktionel',
+        observation: typeof s.observation === 'string' ? s.observation : '',
+        judgement: typeof s.judgement === 'string' ? s.judgement : (typeof s.reason === 'string' ? s.reason : ''),
+        reason: typeof s.judgement === 'string' ? s.judgement : (typeof s.reason === 'string' ? s.reason : ''),
+        // "dokumenteret" kræver en faktisk observation og kan aldrig bruges om linkrelevans
+        evidence: s.evidence === 'dokumenteret' && s.element !== 'link' && typeof s.observation === 'string' && s.observation.trim() ? 'dokumenteret' : (s.evidence === 'redaktionel' ? 'redaktionel' : 'hypotese'),
         source: typeof s.source === 'string' ? s.source : '',
         placement: typeof s.placement === 'string' ? s.placement : '',
       }))
