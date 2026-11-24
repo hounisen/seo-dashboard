@@ -555,7 +555,9 @@ export function analyzeSeo(input: SeoInput): SeoResult {
 
   // SERP-analyser pr. søgeord
   const serpAnalyses: Record<string, SerpAnalysis> = {}
-  for (const [k, d] of Object.entries(input.serp ?? {})) serpAnalyses[k] = analyzeSerp(d, pageType)
+  // Kun SERP-målinger for denne analyses egne søgeord indgår – cachede målinger fra andre sider ignoreres
+  const currentKeys = new Set([input.targetKeyword, ...input.semanticKeywords].filter(Boolean).map(normKw))
+  for (const [k, d] of Object.entries(input.serp ?? {})) if (currentKeys.has(normKw(k))) serpAnalyses[normKw(k)] = analyzeSerp(d, pageType)
 
   const focus = computeFocus(input, text, serpAnalyses)
 

@@ -1938,6 +1938,7 @@ export default function SeoDashboard() {
                 {Object.keys(result.serpAnalyses).length > 0 && (
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
                   <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-3">SERP-analyse (Ahrefs SERP Overview, Danmark)</p>
+                  <p className="text-xs text-gray-400 mb-3">Viser kun denne analyses søgeord. Målinger gemmes i 24 timer i denne browser for at spare Ahrefs-enheder. <button onClick={() => { if (confirm('Slet alle gemte SERP-målinger i denne browser?')) { setSerpMap({}); try { localStorage.removeItem('serpCache') } catch { /* ignorer */ } } }} className="text-blue-600 hover:underline">Ryd gemte SERP-målinger</button></p>
                   {Object.entries(result.serpAnalyses).map(([k, a]) => (
                     <details key={k} className="mb-3 border-b border-gray-100 pb-3">
                       <summary className="cursor-pointer text-sm font-semibold text-gray-800">«{a.keyword}» – {a.organicCount} organiske resultater · {a.uncertain ? 'usikker vurdering' : 'vurdering'}: {a.verdict}</summary>
